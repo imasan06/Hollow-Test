@@ -83,22 +83,66 @@ class BleManager {
     }
 
     try {
-      // Request device with specific service
-      const device = await BleClient.requestDevice({
-        services: [SERVICE_UUID],
-        namePrefix: DEVICE_NAME,
-        optionalServices: [],
-      });
+      // Strategy 1: Try with namePrefix only (most flexible - device may not advertise service UUID in scan)
+      console.log('[BLE] Attempting scan with namePrefix only...');
+      let device: BleDevice | null = null;
+      
+      try {
+        device = await BleClient.requestDevice({
+          namePrefix: DEVICE_NAME,
+          optionalServices: [SERVICE_UUID], // Include service as optional for discovery after connection
+        });
+        console.log('[BLE] Device found via namePrefix:', device.name ?? 'Unknown', device.deviceId);
+      } catch (namePrefixError) {
+        console.log('[BLE] NamePrefix scan failed, trying without filters...');
+        
+        // Strategy 2: Try without any filters (show all devices)
+        try {
+          device = await BleClient.requestDevice({
+            optionalServices: [SERVICE_UUID],
+          });
+          
+          // Verify the device name matches our prefix
+          if (device && device.name && device.name.startsWith(DEVICE_NAME)) {
+            console.log('[BLE] Device found without filters:', device.name, device.deviceId);
+          } else {
+            console.warn('[BLE] Device found but name does not match prefix:', device?.name);
+            // Still allow connection - user can select manually
+          }
+        } catch (noFilterError) {
+          console.log('[BLE] No-filter scan failed, trying with service UUID filter...');
+          
+          // Strategy 3: Try with service UUID (original method - may work if device advertises service)
+          try {
+            device = await BleClient.requestDevice({
+              services: [SERVICE_UUID],
+              optionalServices: [],
+            });
+            console.log('[BLE] Device found via service UUID:', device.name ?? 'Unknown', device.deviceId);
+          } catch (serviceError) {
+            console.error('[BLE] All scan strategies failed');
+            throw serviceError; // Throw the last error
+          }
+        }
+      }
 
       if (device) {
-        console.log('[BLE] Device found:', device.name ?? 'Unknown', device.deviceId);
+        // Verify device name matches prefix (if available)
+        if (device.name && !device.name.startsWith(DEVICE_NAME)) {
+          console.warn(`[BLE] Warning: Device name "${device.name}" does not match expected prefix "${DEVICE_NAME}"`);
+          console.warn('[BLE] Proceeding anyway - user may have selected correct device manually');
+        }
+        
         this.device = device;
         await this.connectReal();
+      } else {
+        throw new Error('No device selected');
       }
     } catch (error) {
       console.error('[BLE] Scan failed:', error);
       this.callbacks?.onConnectionStateChange('disconnected');
-      this.callbacks?.onError?.('Scan failed or cancelled');
+      const errorMessage = error instanceof Error ? error.message : 'Scan failed or cancelled';
+      this.callbacks?.onError?.(errorMessage);
     }
   }
 
