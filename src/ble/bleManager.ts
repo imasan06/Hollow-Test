@@ -84,7 +84,8 @@ class BleManager {
 
     try {
       // Strategy 1: Try with namePrefix only (most flexible - device may not advertise service UUID in scan)
-      console.log('[BLE] Attempting scan with namePrefix only...');
+      console.log(`[BLE] Attempting scan with namePrefix: "${DEVICE_NAME}"...`);
+      console.log('[BLE] Note: If device was just turned on, wait 3-5 seconds for it to start advertising');
       let device: BleDevice | null = null;
       
       try {
@@ -92,35 +93,57 @@ class BleManager {
           namePrefix: DEVICE_NAME,
           optionalServices: [SERVICE_UUID], // Include service as optional for discovery after connection
         });
-        console.log('[BLE] Device found via namePrefix:', device.name ?? 'Unknown', device.deviceId);
+        console.log('[BLE] ✓ Device found via namePrefix:', device.name ?? 'Unknown', device.deviceId);
       } catch (namePrefixError) {
-        console.log('[BLE] NamePrefix scan failed, trying without filters...');
+        const errorMsg = namePrefixError instanceof Error ? namePrefixError.message : String(namePrefixError);
+        console.log(`[BLE] NamePrefix scan failed: ${errorMsg}`);
+        console.log('[BLE] Trying without filters (will show all BLE devices)...');
         
         // Strategy 2: Try without any filters (show all devices)
+        // This is the most reliable method - shows all devices and lets user select
         try {
+          console.log('[BLE] Showing device picker with all available BLE devices...');
+          console.log(`[BLE] Look for a device starting with "${DEVICE_NAME}" in the list`);
           device = await BleClient.requestDevice({
             optionalServices: [SERVICE_UUID],
           });
           
+          if (!device) {
+            throw new Error('No device selected by user');
+          }
+          
           // Verify the device name matches our prefix
-          if (device && device.name && device.name.startsWith(DEVICE_NAME)) {
-            console.log('[BLE] Device found without filters:', device.name, device.deviceId);
+          if (device.name && device.name.startsWith(DEVICE_NAME)) {
+            console.log('[BLE] ✓ Device found without filters (name matches):', device.name, device.deviceId);
+          } else if (device.name) {
+            console.warn(`[BLE] ⚠ Device selected: "${device.name}" (does not match prefix "${DEVICE_NAME}")`);
+            console.warn('[BLE] Proceeding with connection - user selected this device manually');
           } else {
-            console.warn('[BLE] Device found but name does not match prefix:', device?.name);
-            // Still allow connection - user can select manually
+            console.warn('[BLE] ⚠ Device selected but has no name');
+            console.warn('[BLE] Proceeding with connection - user selected this device manually');
           }
         } catch (noFilterError) {
-          console.log('[BLE] No-filter scan failed, trying with service UUID filter...');
+          const errorMsg = noFilterError instanceof Error ? noFilterError.message : String(noFilterError);
+          console.log(`[BLE] No-filter scan failed: ${errorMsg}`);
+          console.log('[BLE] Trying with service UUID filter (last attempt)...');
           
           // Strategy 3: Try with service UUID (original method - may work if device advertises service)
           try {
+            console.log(`[BLE] Scanning for devices advertising service: ${SERVICE_UUID}`);
             device = await BleClient.requestDevice({
               services: [SERVICE_UUID],
               optionalServices: [],
             });
-            console.log('[BLE] Device found via service UUID:', device.name ?? 'Unknown', device.deviceId);
+            console.log('[BLE] ✓ Device found via service UUID:', device.name ?? 'Unknown', device.deviceId);
           } catch (serviceError) {
-            console.error('[BLE] All scan strategies failed');
+            const errorMsg = serviceError instanceof Error ? serviceError.message : String(serviceError);
+            console.error('[BLE] ✗ All scan strategies failed');
+            console.error('[BLE] Last error:', errorMsg);
+            console.error('[BLE] Troubleshooting tips:');
+            console.error('  1. Ensure the device Bluetooth is ON and in discoverable mode');
+            console.error('  2. Wait 3-5 seconds after turning on Bluetooth before scanning');
+            console.error(`  3. Verify device name starts with "${DEVICE_NAME}"`);
+            console.error(`  4. Check that device is advertising service UUID: ${SERVICE_UUID}`);
             throw serviceError; // Throw the last error
           }
         }
