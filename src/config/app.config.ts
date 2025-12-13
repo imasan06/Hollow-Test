@@ -1,6 +1,6 @@
 export const APP_CONFIG = {
   // BLE behavior
-  BLE_MOCK_MODE: process.env.REACT_APP_MOCK_MODE === 'true' || true,
+  BLE_MOCK_MODE: process.env.REACT_APP_MOCK_MODE === 'false' || false,
   // Hollow Watch BLE UUIDs (spec)
   SERVICE_UUID: '0000abcd-0000-1000-8000-00805f9b34fb',
   AUDIO_CHAR_UUID: '0000abcd-0001-1000-8000-00805f9b34fb',

@@ -1,69 +1,141 @@
-# Hollow Watch Companion (React + Capacitor)
 
-Companion app for the **Hollow Watch** that records audio over BLE, decodes IMA ADPCM → PCM16, wraps it into WAV, and sends it to the backend for transcription/LLM response.  
-The app now supports **two interchangeable modes**: real hardware and full mock/demo without hardware.
+## Quick Start
 
-## Quick start
+1. **Install dependencies:**
+   ```bash
+   npm install
+   ```
 
-```bash
-npm install
-npm run dev
-```
+2. **Start the development server:**
+   ```bash
+   npm run dev
+   ```
+
+3. **Open the app:**
+   - For Mock/Demo mode: Open the URL shown in the terminal (typically `http://localhost:5173`)
+   - For Real Hardware mode: Build and deploy to an Android device (see [Running with Real Watch](#running-with-real-watch) section)
 
 ## Configuration
 
-All mode toggles and BLE constants live in `src/config/app.config.ts`:
+The app configuration is located in `src/config/app.config.ts`. The main toggle is:
 
-```ts
-export const APP_CONFIG = {
-  BLE_MOCK_MODE: false,          // true = demo/mock, false = real watch
-  SERVICE_UUID: '0000abcd-0000-1000-8000-00805f9b34fb',
-  AUDIO_CHAR_UUID: '0000abcd-0001-1000-8000-00805f9b34fb',
-  TEXT_CHAR_UUID: '0a3d547e-6967-4660-a744-8ace08191266',
-  DEVICE_NAME_PREFIX: 'Hollow 1W',
-  MOCK_AUDIO_DURATION_SECONDS: 3,
-  MOCK_CHUNK_SIZE_BYTES: 128,
-  MOCK_CHUNK_DELAY_MS: 100,
-  MOCK_FREQUENCY_HZ: 440,
-  MOCK_SAMPLE_RATE: 8000,
-};
+```typescript
+BLE_MOCK_MODE: boolean
 ```
 
-Toggle between modes by changing only `BLE_MOCK_MODE`.
+### BLE Service UUIDs
+- `SERVICE_UUID`: `0000abcd-0000-1000-8000-00805f9b34fb`
+- `AUDIO_CHAR_UUID`: `0000abcd-0001-1000-8000-00805f9b34fb`
+- `TEXT_CHAR_UUID`: `0a3d547e-6967-4660-a744-8ace08191266`
+- `DEVICE_NAME_PREFIX`: `Hollow 1W`
 
-## Modes
+### Mock Audio Settings
+- `MOCK_AUDIO_DURATION_SECONDS`: 3
+- `MOCK_CHUNK_SIZE_BYTES`: 128
+- `MOCK_CHUNK_DELAY_MS`: 100
+- `MOCK_FREQUENCY_HZ`: 440
+- `MOCK_SAMPLE_RATE`: 8000
 
-- **Production (real hardware)**  
-  - Uses Capacitor `BleClient` with the Hollow Watch service/characteristics above.  
-  - Receives real notifications and decodes ADPCM → PCM → WAV.  
-  - Normal reconnection + time sync behavior.
+## Running in MOCK/DEMO Mode (No Watch Required)
 
-- **Mock/Demo (no hardware required)**  
-  - Fully simulates scan, connect, and streaming.  
-  - Generates a 440Hz sine wave in PCM, encodes to **valid IMA ADPCM**, and emits 128-byte chunks every 100ms.  
-  - Sends START_V and END markers; logs mirror the real flow.  
-  - UI shows a small `DEMO MODE` badge.
+This mode simulates the entire BLE connection and audio streaming flow without requiring physical hardware. It's perfect for development, testing, and demonstrations.
 
-## Testing
+### Steps
 
-### Mock mode (no watch)
-1. Set `BLE_MOCK_MODE: true` in `src/config/app.config.ts`.
-2. `npm run dev` and open the app.
-3. Click “Connect Watch”. You should see:
-   - `[BLE] Scanning for Hollow Watch...`
-   - `[BLE] Device found: Hollow-DEMO`
-   - `[BLE] ✓ Connected`
-   - Chunk logs, then `→ END received` and WAV processing.
-4. Audio decodes, WAV is generated, and the app proceeds as if real hardware sent it.
+1. **Enable Mock Mode:**
+   - Open `src/config/app.config.ts`
+   - Set `BLE_MOCK_MODE: true`
 
-### Real mode (with watch)
-1. Set `BLE_MOCK_MODE: false`.
-2. `npm run dev` on a device with BLE + Capacitor native runtime.
-3. Click “Connect Watch”; the app will request a device with the configured UUIDs and name prefix.
-4. Speak into the watch; chunks arrive, decode, and are sent to the backend as WAV.
+2. **Start the development server:**
+   ```bash
+   npm run dev
+   ```
 
-## Notes
-- ADPCM decoding uses the standard IMA ADPCM algorithm (8kHz mono as per Hollow spec).  
-- WAV encoding now uses the same 8kHz sample rate.  
-- Logs in both modes are intentionally identical for demos.  
-- The mock keeps realistic timing (100ms between 128-byte chunks) to mimic the watch.
+3. **Open the app in your browser:**
+   - Navigate to the URL shown in the terminal (e.g., `http://localhost:5173`)
+
+4. **Click "Connect Watch"** in the app interface
+
+### Expected Console Log Sequence
+
+When running in Mock/Demo mode, you should see the following log sequence in your browser's developer console:
+
+```
+[BLE] Mode: MOCK/DEMO
+[BLE] Mock service ready
+[BLE] Scanning for Hollow Watch...
+[BLE] Device found: Hollow-DEMO
+[BLE] Connecting...
+[BLE] ✓ Connected
+[BLE] Subscribing to audio notifications...
+[BLE] → START_V received
+[BLE] Chunk 1/... (128 bytes) - Total: 128 bytes
+[BLE] Chunk 2/... (128 bytes) - Total: 256 bytes
+[BLE] Chunk 3/... (128 bytes) - Total: 384 bytes
+...
+[BLE] → END received
+[Hook] onAudioComplete called. Mode: VOICE
+[Hook] Processing ADPCM buffer, size: ...
+[Hook] Decoded to PCM samples: ...
+[Hook] Audio duration: 3.00 seconds
+[Hook] WAV base64 length: ...
+```
+
+The mock mode generates a 3-second 440Hz sine wave, encodes it as IMA ADPCM, and streams it in chunks to simulate the real watch behavior. The audio processing pipeline (ADPCM → PCM16 → WAV) works identically to the real hardware flow.
+
+## Running with Real Watch
+
+To connect to an actual Hollow Watch device, you need to build the app as a native Android application using Capacitor.
+
+### Steps
+
+1. **Disable Mock Mode:**
+   - Open `src/config/app.config.ts`
+   - Set `BLE_MOCK_MODE: false`
+
+2. **Build the web assets:**
+   ```bash
+   npm run build
+   ```
+
+3. **Sync Capacitor with Android:**
+   ```bash
+   npx cap sync android
+   ```
+
+4. **Open Android Studio:**
+   ```bash
+   npx cap open android
+   ```
+
+5. **Deploy to device:**
+   - Connect your Android device via USB (enable USB debugging)
+   - In Android Studio, select your device from the device dropdown
+   - Click the "Run" button (green play icon) or press `Shift+F10`
+   - The app will be installed and launched on your device
+
+### BLE Scanning Flow
+
+When you click "Connect Watch" in the app:
+
+1. **Permission Prompts:**
+   - The app will request Bluetooth permissions (`BLUETOOTH_SCAN`, `BLUETOOTH_CONNECT`)
+   - On Android 12+, Location permission may also be required for BLE scanning
+   - Grant all requested permissions
+
+2. **Device Picker:**
+   - A system dialog will appear showing available BLE devices
+   - Look for devices with names starting with "Hollow 1W"
+   - Select your watch from the list
+
+3. **Connection:**
+   - The app will connect to the selected device
+   - Audio notifications will be subscribed automatically
+   - Time synchronization will be sent to the watch
+
+4. **Audio Reception:**
+   - When the watch sends audio, you'll see chunk logs in the console
+   - The app will decode ADPCM → PCM16 → WAV automatically
+   - Audio will be sent to the backend for transcription
+
+
