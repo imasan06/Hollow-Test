@@ -1,0 +1,17 @@
+export const APP_CONFIG = {
+  // BLE behavior
+  BLE_MOCK_MODE: process.env.REACT_APP_MOCK_MODE === 'true' || true,
+  // Hollow Watch BLE UUIDs (spec)
+  SERVICE_UUID: '0000abcd-0000-1000-8000-00805f9b34fb',
+  AUDIO_CHAR_UUID: '0000abcd-0001-1000-8000-00805f9b34fb',
+  TEXT_CHAR_UUID: '0a3d547e-6967-4660-a744-8ace08191266',
+  DEVICE_NAME_PREFIX: 'Hollow 1W',
+
+  // Mock audio settings
+  MOCK_AUDIO_DURATION_SECONDS: 3,
+  MOCK_CHUNK_SIZE_BYTES: 128,
+  MOCK_CHUNK_DELAY_MS: 100,
+  MOCK_FREQUENCY_HZ: 440,
+  MOCK_SAMPLE_RATE: 8000,
+} as const;
+

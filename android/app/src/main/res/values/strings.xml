@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Hollow 0W</string>
+    <string name="title_activity_main">Hollow 0W</string>
+    <string name="package_name">com.hollow.watch</string>
+    <string name="custom_url_scheme">com.hollow.watch</string>
+</resources>
