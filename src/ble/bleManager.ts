@@ -386,18 +386,35 @@ class BleManager {
       return;
     }
 
-    // Unix epoch in seconds (UTC)
-    // The watch should handle timezone conversion based on its own settings
-    const epochSeconds = Math.floor(Date.now() / 1000);
-    // Use TIME: prefix so watch can distinguish from AI responses
+    // Unix epoch in seconds
+    // FIX: The watch is interpreting UTC as local time, so we need to send local time
+    // adjusted to appear as UTC. We calculate what UTC timestamp would show the local time.
+    const now = new Date();
+    const epochSecondsUTC = Math.floor(now.getTime() / 1000);
+    
+    // Get local time components
+    const localYear = now.getFullYear();
+    const localMonth = now.getMonth();
+    const localDate = now.getDate();
+    const localHours = now.getHours();
+    const localMinutes = now.getMinutes();
+    const localSeconds = now.getSeconds();
+    
+    // Create UTC timestamp that represents the local time (watch will display it as-is)
+    // This is what the watch needs: a UTC timestamp that when displayed shows local time
+    const localAsUTCTimestamp = Date.UTC(localYear, localMonth, localDate, localHours, localMinutes, localSeconds);
+    const epochSeconds = Math.floor(localAsUTCTimestamp / 1000);
+    
     const timeString = `${PROTOCOL.TIME_PREFIX}${epochSeconds}`;
     
-    // Log both UTC and local time for debugging
-    const now = new Date();
+    // Log for debugging
     const localTime = now.toLocaleTimeString();
     const utcTime = now.toUTCString();
+    const timezoneOffset = -now.getTimezoneOffset() / 60; // Offset in hours
     console.log('[BLE] Sending time (TIME: prefix):', timeString);
-    console.log('[BLE] Current time - Local:', localTime, 'UTC:', utcTime, 'Epoch:', epochSeconds);
+    console.log('[BLE] Current time - Local:', localTime, 'UTC:', utcTime);
+    console.log('[BLE] Timezone offset:', timezoneOffset, 'hours');
+    console.log('[BLE] Epoch sent:', epochSeconds, '(local time as UTC) vs UTC epoch:', epochSecondsUTC);
 
     try {
       const encoder = new TextEncoder();
