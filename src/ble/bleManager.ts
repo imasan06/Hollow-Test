@@ -386,12 +386,18 @@ class BleManager {
       return;
     }
 
-    // Unix epoch in seconds
+    // Unix epoch in seconds (UTC)
+    // The watch should handle timezone conversion based on its own settings
     const epochSeconds = Math.floor(Date.now() / 1000);
     // Use TIME: prefix so watch can distinguish from AI responses
     const timeString = `${PROTOCOL.TIME_PREFIX}${epochSeconds}`;
     
+    // Log both UTC and local time for debugging
+    const now = new Date();
+    const localTime = now.toLocaleTimeString();
+    const utcTime = now.toUTCString();
     console.log('[BLE] Sending time (TIME: prefix):', timeString);
+    console.log('[BLE] Current time - Local:', localTime, 'UTC:', utcTime, 'Epoch:', epochSeconds);
 
     try {
       const encoder = new TextEncoder();

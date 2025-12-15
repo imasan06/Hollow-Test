@@ -77,25 +77,24 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
     }
   } 
   // For text requests (testing): 
-  // IMPORTANT: The backend might only process 'audio' and ignore 'text' field
-  // When backend receives audio, it: 1) transcribes audio -> text, 2) adds to context, 3) processes
-  // For testing, we simulate step 2: add text directly to context as if it was transcribed
+  // IMPORTANT: The backend processes 'text' field directly when no audio is provided
+  // We need to ensure the text is properly formatted for the backend
   else if (request.text) {
-    // Try sending text field (backend might accept it, but might ignore it)
-    requestWithContext.text = request.text;
+    // Send text field - backend should process this directly
+    requestWithContext.text = request.text.trim();
     
-    // CRITICAL: Add text to context as latest USER message
-    // This simulates what backend does after transcribing audio
-    // The backend likely reads from context, not from 'text' field
+    // Also add text to context as latest USER message for consistency
+    // This ensures the backend has the text in both places
     if (context) {
-      // Append new user message to context (simulating post-transcription)
-      requestWithContext.context = context + '\n\nUSER: ' + request.text;
+      // Append new user message to context
+      requestWithContext.context = context + '\n\nUSER: ' + request.text.trim();
     } else {
       // If no context, create new context with just this message
-      requestWithContext.context = 'USER: ' + request.text;
+      requestWithContext.context = 'USER: ' + request.text.trim();
     }
     
-    console.log('[API] Testing mode: Added text to context (simulating audio transcription)');
+    console.log('[API] Text-only mode: Sending text field and context');
+    console.log('[API] Text value:', request.text.trim());
   }
   
   // Add persona and rules (loaded from storage or provided in request)
@@ -142,6 +141,7 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
     const url = `${API_ENDPOINT}/transcribe`;
     const isNative = Capacitor.isNativePlatform();
     const origin = typeof window !== 'undefined' ? window.location.origin : 'N/A';
+    const requestStart = performance.now();
     
     console.log('[API] Request URL:', url);
     console.log('[API] Environment:', {
@@ -163,9 +163,13 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
             'Content-Type': 'application/json',
           },
           data: requestWithContext,
+          // Add timeout to prevent hanging requests
+          connectTimeout: 30000, // 30 seconds
+          readTimeout: 60000,    // 60 seconds for AI processing
         });
 
-        console.log('[API] CapacitorHttp response status:', nativeResponse.status);
+        const requestTime = performance.now() - requestStart;
+        console.log('[API] CapacitorHttp response status:', nativeResponse.status, `(${requestTime.toFixed(2)}ms)`);
         
         if (nativeResponse.status >= 400) {
           const errorData = typeof nativeResponse.data === 'string' 
@@ -203,21 +207,30 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
     // 🌐 En web browser: fetch normal (aquí sí puede haber CORS, pero es esperado)
     console.log('[API] Web browser detected - using fetch (CORS may apply)');
     
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout
+    
     const response = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(requestWithContext),
+      signal: controller.signal,
     });
+    
+    clearTimeout(timeoutId);
 
+    const requestTime = performance.now() - requestStart;
+    
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('[API] Server error:', response.status, errorText);
+      console.error('[API] Server error:', response.status, errorText, `(${requestTime.toFixed(2)}ms)`);
       throw new Error(`Server error: ${response.status} - ${errorText}`);
     }
 
     const data = await response.json();
+    console.log('[API] Request completed successfully', `(${requestTime.toFixed(2)}ms)`);
     
     // Normalize response: backend may return "answer" or "text"
     const normalizedData: TranscribeResponse = {

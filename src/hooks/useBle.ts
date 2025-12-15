@@ -111,17 +111,28 @@ export function useBle(): UseBleReturn {
         }
   
         // Decode ADPCM to PCM16
+        const decodeStart = performance.now();
         const { samples } = decodeImaAdpcm(adpcmData);
-        console.log(`[Hook] [${sessionId}] Decoded to PCM samples:`, samples.length);
-  
+        const decodeTime = performance.now() - decodeStart;
+        console.log(`[Hook] [${sessionId}] Decoded to PCM samples:`, samples.length, `(${decodeTime.toFixed(2)}ms)`);
+
         // Calculate duration
         const duration = getAudioDuration(samples.length);
         setAudioDuration(duration);
         console.log(`[Hook] [${sessionId}] Audio duration:`, duration.toFixed(2), 'seconds');
-  
+
         // Encode to WAV base64
+        const encodeStart = performance.now();
         const wavBase64 = encodeWavBase64(samples);
-        console.log(`[Hook] [${sessionId}] WAV base64 length:`, wavBase64.length);
+        const encodeTime = performance.now() - encodeStart;
+        console.log(`[Hook] [${sessionId}] WAV base64 length:`, wavBase64.length, `(${encodeTime.toFixed(2)}ms)`);
+        
+        // Log audio quality info
+        if (samples.length > 0) {
+          const maxSample = Math.max(...Array.from(samples).map(Math.abs));
+          const avgSample = Math.abs(Array.from(samples).reduce((a, b) => a + Math.abs(b), 0) / samples.length);
+          console.log(`[Hook] [${sessionId}] Audio quality - Max: ${maxSample}, Avg: ${avgSample.toFixed(0)}`);
+        }
 
         // In demo/mock mode, skip network call to avoid CORS/backends
         let apiResponse: { transcription?: string; text: string; error?: string };
