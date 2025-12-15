@@ -14,6 +14,8 @@ export const PROTOCOL = {
   START_SILENT: 'START_S',
   END: 'END',
   GET_TIME: 'GET_TIME',
+  REQ_TIME: 'REQ_TIME', // Watch requests time
+  TIME_PREFIX: 'TIME:', // Prefix for time messages sent to watch
 } as const;
 
 // BLE connection settings

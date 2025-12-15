@@ -9,6 +9,7 @@ import {
 } from './constants';
 import { APP_CONFIG } from '@/config/app.config';
 import { MockBleService } from './mockBleService';
+import { BleMessageType } from '@/types/bleMessages';
 
 export type ConnectionState = 'disconnected' | 'scanning' | 'connecting' | 'connected';
 export type VoiceState = 'idle' | 'listening' | 'processing' | 'responding';
@@ -21,6 +22,7 @@ export interface BleManagerCallbacks {
   onTimeRequest?: () => void;
   onError?: (error: string) => void;
   onAudioComplete?: (adpcmData: Uint8Array, mode: 'VOICE' | 'SILENT') => void;
+  onControlMessage?: (command: string, data?: string) => void; // For REQ_TIME, SET_PERSONA, etc.
 }
 
 class BleManager {
@@ -104,9 +106,7 @@ class BleManager {
         try {
           console.log('[BLE] Showing device picker with all available BLE devices...');
           console.log(`[BLE] Look for a device starting with "${DEVICE_NAME}" in the list`);
-          device = await BleClient.requestDevice({
-            optionalServices: [SERVICE_UUID],
-          });
+          device = await BleClient.requestDevice({});
           
           if (!device) {
             throw new Error('No device selected by user');
@@ -197,9 +197,9 @@ class BleManager {
       this.callbacks?.onConnectionStateChange('connected');
       this.reconnectAttempts = 0;
 
-      // Send time immediately on connect
-      await this.sendTime();
-      console.log('[BLE] Sent initial time sync');
+      // Note: Time sync is now handled by TimeSyncService
+      // It will send time immediately and then every 60 seconds
+      console.log('[BLE] Connection established - TimeSyncService will handle time sync');
 
     } catch (error) {
       console.error('[BLE] Connection failed:', error);
@@ -232,6 +232,29 @@ class BleManager {
       }
     } catch {
       msg = null;
+    }
+  
+    // Check for control messages first (REQ_TIME, SET_PERSONA, etc.)
+    if (msg === PROTOCOL.REQ_TIME) {
+      console.log('[BLE] → REQ_TIME received (control message)');
+      this.callbacks?.onTimeRequest?.();
+      this.callbacks?.onControlMessage?.('REQ_TIME');
+      return; // CRITICAL: Don't process as audio or AI text
+    }
+
+    // Check for other control messages (SET_PERSONA_JSON, SET_PERSONA, etc.)
+    if (msg && msg.startsWith('SET_PERSONA')) {
+      console.log('[BLE] → Control message received:', msg);
+      // Extract data after colon (SET_PERSONA_JSON:{"name":"..."} or SET_PERSONA:text)
+      const colonIndex = msg.indexOf(':');
+      if (colonIndex !== -1) {
+        const command = msg.substring(0, colonIndex);
+        const data = msg.substring(colonIndex + 1);
+        this.callbacks?.onControlMessage?.(command, data);
+      } else {
+        this.callbacks?.onControlMessage?.(msg);
+      }
+      return; // Don't process as audio or AI text
     }
   
     if (msg === PROTOCOL.START_VOICE) {
@@ -304,6 +327,10 @@ class BleManager {
     this.audioBuffer = [];
   }
 
+  /**
+   * Send AI response text to watch
+   * This is separate from sendTime() to avoid routing confusion
+   */
   async sendText(text: string): Promise<void> {
     if (this.mockMode) {
       console.log('[BLE] (mock) Skipping sendText, mock device');
@@ -314,7 +341,7 @@ class BleManager {
       throw new Error('Not connected to device');
     }
 
-    console.log('[BLE] Sending text:', text.substring(0, 50) + '...');
+    console.log('[BLE] Sending AI text response:', text.substring(0, 50) + '...');
 
     try {
       const encoder = new TextEncoder();
@@ -328,14 +355,26 @@ class BleManager {
         dataView
       );
 
-      console.log('[BLE] Text sent successfully');
+      console.log('[BLE] AI text sent successfully');
     } catch (error) {
-      console.error('[BLE] Failed to send text:', error);
+      console.error('[BLE] Failed to send AI text:', error);
       this.callbacks?.onError?.('Failed to send response to watch');
       throw error;
     }
   }
 
+  /**
+   * Send AI response text (alias for sendText for clarity)
+   */
+  async sendAiText(text: string): Promise<void> {
+    return this.sendText(text);
+  }
+
+  /**
+   * Send time to watch using TIME: prefix
+   * This is separate from sendText() to prevent time from appearing as AI answer
+   * Format: "TIME:<epoch_seconds>"
+   */
   async sendTime(): Promise<void> {
     if (this.mockMode) {
       console.log('[BLE] (mock) Skipping time sync');
@@ -349,9 +388,10 @@ class BleManager {
 
     // Unix epoch in seconds
     const epochSeconds = Math.floor(Date.now() / 1000);
-    const timeString = `${epochSeconds}`;
+    // Use TIME: prefix so watch can distinguish from AI responses
+    const timeString = `${PROTOCOL.TIME_PREFIX}${epochSeconds}`;
     
-    console.log('[BLE] Sending time (epoch):', timeString);
+    console.log('[BLE] Sending time (TIME: prefix):', timeString);
 
     try {
       const encoder = new TextEncoder();
@@ -365,9 +405,10 @@ class BleManager {
         dataView
       );
 
-      console.log('[BLE] Time sent successfully');
+      console.log('[BLE] Time sent successfully (via dedicated time channel)');
     } catch (error) {
       console.error('[BLE] Failed to send time:', error);
+      // Don't throw - time sync failures shouldn't break the app
     }
   }
 
@@ -406,6 +447,9 @@ class BleManager {
   }
 
   async disconnect(): Promise<void> {
+    // Stop time sync service when disconnecting
+    // Note: TimeSyncService will be stopped by useBle hook, but we ensure it here too
+    
     if (this.device && !this.mockMode) {
       try {
         await BleClient.stopNotifications(

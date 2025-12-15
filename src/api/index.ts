@@ -3,10 +3,16 @@
  * 
  * Handles communication with the LLM backend service.
  * Audio is sent to backend for transcription and LLM processing.
+ * Includes conversation context from previous messages.
  */
+
+import { formatConversationContext } from '@/storage/conversationStore';
+import { getActivePreset } from '@/storage/settingsStore';
+import { Capacitor, CapacitorHttp } from '@capacitor/core';
 
 // Hollow backend endpoint
 const API_ENDPOINT = 'https://hollow-backend.fly.dev';
+
 
 export interface TranscribeRequest {
   audio?: string; // WAV base64
@@ -14,6 +20,7 @@ export interface TranscribeRequest {
   rules?: string;
   baserules?: string;
   persona?: string;
+  context?: string; // Conversation history context
 }
 
 export interface TranscribeResponse {
@@ -24,35 +31,204 @@ export interface TranscribeResponse {
 
 /**
  * Send audio or text to backend for transcription and LLM processing
+ * Automatically includes conversation context from previous messages
  * 
  * @param request - Request with audio (WAV base64) or text
  * @returns Promise resolving to LLM response text
  */
 export async function sendTranscription(request: TranscribeRequest): Promise<TranscribeResponse> {
+  // Fetch conversation context (last 12 turns)
+  const context = await formatConversationContext();
+  
+  // Load active persona preset from storage
+  const activePreset = await getActivePreset();
+  const persona = request.persona || activePreset.persona;
+  const rules = request.rules || activePreset.rules || undefined;
+  const baserules = request.baserules || activePreset.baseRules || undefined;
+  
+  // Log which preset is being used
+  console.log(`[API] Using persona preset: "${activePreset.name}" (id: ${activePreset.id})`);
+  
+  // Build request with context (only include defined fields)
+  // IMPORTANT: Backend might only accept 'audio', not 'text' directly
+  // If backend doesn't accept 'text', we need to simulate what happens after audio transcription
+  const requestWithContext: any = {};
+  
+  // For audio requests (real mode): send audio + context (exact format backend expects)
+  // If both audio and text are provided (testing mode), send both
+  if (request.audio) {
+    requestWithContext.audio = request.audio;
+    
+    // If text is also provided (testing mode), include it
+    // This allows testing: audio will be transcribed as empty, but text provides the input
+    if (request.text) {
+      requestWithContext.text = request.text;
+      // Also add text to context as latest USER message (simulating post-transcription)
+      if (context) {
+        requestWithContext.context = context + '\n\nUSER: ' + request.text;
+      } else {
+        requestWithContext.context = 'USER: ' + request.text;
+      }
+    } else {
+      // Normal audio mode: just include context as-is
+      if (context) {
+        requestWithContext.context = context;
+      }
+    }
+  } 
+  // For text requests (testing): 
+  // IMPORTANT: The backend might only process 'audio' and ignore 'text' field
+  // When backend receives audio, it: 1) transcribes audio -> text, 2) adds to context, 3) processes
+  // For testing, we simulate step 2: add text directly to context as if it was transcribed
+  else if (request.text) {
+    // Try sending text field (backend might accept it, but might ignore it)
+    requestWithContext.text = request.text;
+    
+    // CRITICAL: Add text to context as latest USER message
+    // This simulates what backend does after transcribing audio
+    // The backend likely reads from context, not from 'text' field
+    if (context) {
+      // Append new user message to context (simulating post-transcription)
+      requestWithContext.context = context + '\n\nUSER: ' + request.text;
+    } else {
+      // If no context, create new context with just this message
+      requestWithContext.context = 'USER: ' + request.text;
+    }
+    
+    console.log('[API] Testing mode: Added text to context (simulating audio transcription)');
+  }
+  
+  // Add persona and rules (loaded from storage or provided in request)
+  if (persona) {
+    requestWithContext.persona = persona;
+  }
+  if (rules) {
+    requestWithContext.rules = rules;
+  }
+  if (baserules) {
+    requestWithContext.baserules = baserules;
+  }
+  
+  // Log the exact format being sent (for debugging)
+  console.log('[API] Request format (matching real mode):', {
+    hasAudio: !!requestWithContext.audio,
+    hasText: !!requestWithContext.text,
+    hasContext: !!requestWithContext.context,
+    contextLength: requestWithContext.context?.length || 0,
+    allKeys: Object.keys(requestWithContext),
+  });
+  
+  // Debug: Verify text is included
+  console.log('[API] Request payload debug:', {
+    hasText: !!requestWithContext.text,
+    textValue: requestWithContext.text,
+    textType: typeof requestWithContext.text,
+    allKeys: Object.keys(requestWithContext),
+  });
+
   const logContent = request.text 
     ? `text: ${request.text.substring(0, 100)}...`
     : `audio: ${request.audio?.substring(0, 50)}...`;
   console.log('[API] Sending to backend:', logContent);
   
+  if (context) {
+    const contextLines = context.split('\n\n').length;
+    console.log(`[API] Including conversation context: ${contextLines} previous messages`);
+  } else {
+    console.log('[API] No conversation history available (first message)');
+  }
+  
   try {
-    const response = await fetch(`${API_ENDPOINT}/transcribe`, {
+    const url = `${API_ENDPOINT}/transcribe`;
+    const isNative = Capacitor.isNativePlatform();
+    const origin = typeof window !== 'undefined' ? window.location.origin : 'N/A';
+    
+    console.log('[API] Request URL:', url);
+    console.log('[API] Environment:', {
+      isNative: isNative,
+      origin: origin,
+      platform: Capacitor.getPlatform()
+    });
+    
+    // ✅ CRITICAL: En Android/iOS SIEMPRE usar CapacitorHttp (bypasses CORS)
+    // Incluso si window.location es localhost, en nativo debemos usar CapacitorHttp
+    if (isNative) {
+      console.log('[API] Native platform detected - using CapacitorHttp (bypasses CORS)');
+      
+      try {
+        const nativeResponse = await CapacitorHttp.request({
+          method: 'POST',
+          url: url,
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          data: requestWithContext,
+        });
+
+        console.log('[API] CapacitorHttp response status:', nativeResponse.status);
+        
+        if (nativeResponse.status >= 400) {
+          const errorData = typeof nativeResponse.data === 'string' 
+            ? JSON.parse(nativeResponse.data) 
+            : nativeResponse.data;
+          console.error('[API] Server error:', nativeResponse.status, errorData);
+          throw new Error(`Server error: ${nativeResponse.status} - ${errorData?.error || 'Unknown error'}`);
+        }
+
+        // res.data puede venir como objeto o string
+        const data = typeof nativeResponse.data === 'string' 
+          ? JSON.parse(nativeResponse.data) 
+          : nativeResponse.data;
+        
+        console.log('[API] CapacitorHttp response data keys:', Object.keys(data));
+        
+        // Normalize response: backend may return "answer" or "text"
+        const normalizedData: TranscribeResponse = {
+          text: data.text || data.answer || data.response || '',
+          transcription: data.transcription,
+          error: data.error,
+        };
+        
+        console.log('[API] Received response:', normalizedData.text?.substring(0, 100) + '...');
+        
+        return normalizedData;
+      } catch (nativeError: any) {
+        console.error('[API] CapacitorHttp failed:', nativeError);
+        // En nativo, NO debemos caer a fetch (tendría CORS)
+        // Si CapacitorHttp falla, es un error real
+        throw new Error(`Native HTTP request failed: ${nativeError?.message || 'Unknown error'}. This should not happen in production.`);
+      }
+    }
+    
+    // 🌐 En web browser: fetch normal (aquí sí puede haber CORS, pero es esperado)
+    console.log('[API] Web browser detected - using fetch (CORS may apply)');
+    
+    const response = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(request),
+      body: JSON.stringify(requestWithContext),
     });
 
     if (!response.ok) {
       const errorText = await response.text();
       console.error('[API] Server error:', response.status, errorText);
-      throw new Error(`Server error: ${response.status}`);
+      throw new Error(`Server error: ${response.status} - ${errorText}`);
     }
 
     const data = await response.json();
-    console.log('[API] Received response:', data.text?.substring(0, 100) + '...');
     
-    return data;
+    // Normalize response: backend may return "answer" or "text"
+    const normalizedData: TranscribeResponse = {
+      text: data.text || data.answer || data.response || '',
+      transcription: data.transcription,
+      error: data.error,
+    };
+    
+    console.log('[API] Received response:', normalizedData.text?.substring(0, 100) + '...');
+    
+    return normalizedData;
   } catch (error) {
     console.error('[API] Request failed:', error);
     throw error;
@@ -64,11 +240,29 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
  */
 export async function checkApiHealth(): Promise<boolean> {
   try {
-    const response = await fetch(`${API_ENDPOINT}/health`, {
+    const url = `${API_ENDPOINT}/health`;
+    
+    // En nativo: usar CapacitorHttp (bypasses CORS)
+    if (Capacitor.isNativePlatform()) {
+      try {
+        const response = await CapacitorHttp.request({
+          method: 'GET',
+          url: url,
+        });
+        return response.status >= 200 && response.status < 300;
+      } catch (error) {
+        console.error('[API] Health check failed (native):', error);
+        return false;
+      }
+    }
+    
+    // En web: usar fetch
+    const response = await fetch(url, {
       method: 'GET',
     });
     return response.ok;
-  } catch {
+  } catch (error) {
+    console.error('[API] Health check failed:', error);
     return false;
   }
 }

@@ -1,13 +1,17 @@
+import { useState } from 'react';
 import { useBle } from '@/hooks/useBle';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { StatusIndicator } from '@/components/ui/StatusIndicator';
 import { VoiceVisualizer } from '@/components/ui/VoiceVisualizer';
 import { ResponseCard } from '@/components/ui/ResponseCard';
-import { Bluetooth, BluetoothOff, Watch, Wifi } from 'lucide-react';
+import { Bluetooth, BluetoothOff, Watch, Wifi, Send, MessageSquare, Settings } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { Badge } from '@/components/ui/badge';
 import { APP_CONFIG } from '@/config/app.config';
 
 export function WatchApp() {
+  const navigate = useNavigate();
   const {
     connectionState,
     voiceState,
@@ -19,10 +23,20 @@ export function WatchApp() {
     scan,
     disconnect,
     deviceName,
+    sendTextMessage,
+    testWithAudio,
   } = useBle();
 
+  const [testMessage, setTestMessage] = useState('');
   const isConnected = connectionState === 'connected';
   const isScanning = connectionState === 'scanning' || connectionState === 'connecting';
+
+  const handleSendTestMessage = async () => {
+    if (!testMessage.trim() || isProcessing) return;
+    // Use testWithAudio to simulate real mode (sends audio WAV base64)
+    await testWithAudio(testMessage);
+    setTestMessage('');
+  };
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
@@ -43,7 +57,17 @@ export function WatchApp() {
               )}
             </div>
           </div>
-          <StatusIndicator status={connectionState} />
+          <div className="flex items-center gap-2">
+            <StatusIndicator status={connectionState} />
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => navigate('/settings')}
+              title="Settings"
+            >
+              <Settings className="h-5 w-5" />
+            </Button>
+          </div>
         </div>
       </header>
 
@@ -126,6 +150,40 @@ export function WatchApp() {
               'Sending response to watch...'
             )}
           </p>
+
+          {/* Test AI Backend (Text Input) */}
+          <div className="w-full max-w-md mt-4 pt-4 border-t border-border">
+            <div className="flex items-center gap-2 mb-2">
+              <MessageSquare className="h-4 w-4 text-muted-foreground" />
+              <p className="text-xs text-muted-foreground">Test AI Backend (without watch)</p>
+            </div>
+            <div className="flex gap-2">
+              <Input
+                type="text"
+                placeholder="Type a message to test AI..."
+                value={testMessage}
+                onChange={(e) => setTestMessage(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSendTestMessage();
+                  }
+                }}
+                disabled={isProcessing}
+                className="flex-1"
+              />
+              <Button
+                onClick={handleSendTestMessage}
+                disabled={!testMessage.trim() || isProcessing}
+                size="icon"
+              >
+                <Send className="h-4 w-4" />
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground mt-2">
+              This sends text directly to the backend with conversation context
+            </p>
+          </div>
         </div>
       </main>
 
