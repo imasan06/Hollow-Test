@@ -449,6 +449,16 @@ export function useBle(): UseBleReturn {
         console.log('[Hook] AI response saved to conversation history');
       }
 
+      // Send response to watch if connected (for testWithAudio mode)
+      if (connectionState === 'connected') {
+        try {
+          await bleManager.sendAiText(apiResponse.text);
+          console.log('[Hook] Test response sent to watch via BLE');
+        } catch (error) {
+          console.warn('[Hook] Failed to send test response to watch:', error);
+        }
+      }
+
       toast({
         title: 'Success',
         description: 'AI response received',

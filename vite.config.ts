@@ -24,4 +24,16 @@ export default defineConfig(({ mode }) => ({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  build: {
+    rollupOptions: {
+      external: [
+        // Capacitor plugins are native and should not be bundled
+        // They are resolved at runtime in Capacitor's native context
+        '@capacitor/preferences',
+        '@capacitor/core',
+        '@capacitor-community/bluetooth-le',
+        '@capacitor-community/http',
+      ],
+    },
+  },
 }));
