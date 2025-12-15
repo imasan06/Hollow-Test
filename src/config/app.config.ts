@@ -7,11 +7,11 @@ export const APP_CONFIG = {
   TEXT_CHAR_UUID: '0A3D547E-6967-4660-A744-8ACE08191266',
   DEVICE_NAME_PREFIX: 'Hollow 1W',
 
-  // Mock audio settings
+  // Audio settings - actual sample rate from watch (8kHz based on logs: 29696 samples / 3.71s = 8000 Hz)
   MOCK_AUDIO_DURATION_SECONDS: 3,
   MOCK_CHUNK_SIZE_BYTES: 128,
   MOCK_CHUNK_DELAY_MS: 100,
   MOCK_FREQUENCY_HZ: 440,
-  MOCK_SAMPLE_RATE: 8000,
+  MOCK_SAMPLE_RATE: 8000, // 8kHz - actual sample rate from Hollow 1W watch
 } as const;
 

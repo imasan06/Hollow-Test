@@ -2,12 +2,13 @@
  * WAV Encoder
  * 
  * Creates valid 16-bit mono WAV files from PCM16 samples.
- * Compatible with the Hollow 0W watch's 16kHz sample rate.
+ * Uses actual sample rate from Hollow 1W watch (8kHz).
+ * Note: Python example uses 16kHz, but actual watch sends 8kHz.
  */
 
 import { APP_CONFIG } from '@/config/app.config';
 
-const SAMPLE_RATE = APP_CONFIG.MOCK_SAMPLE_RATE; // 8kHz per Hollow spec
+const SAMPLE_RATE = APP_CONFIG.MOCK_SAMPLE_RATE; // 8kHz - actual sample rate from watch
 const NUM_CHANNELS = 1;    // Mono
 const BITS_PER_SAMPLE = 16;
 const BYTE_RATE = SAMPLE_RATE * NUM_CHANNELS * (BITS_PER_SAMPLE / 8);

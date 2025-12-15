@@ -87,24 +87,29 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
     }
   } 
   // For text requests (testing): 
-  // IMPORTANT: The backend processes 'text' field directly when no audio is provided
-  // We need to ensure the text is properly formatted for the backend
+  // IMPORTANT: Backend may expect text in different format
+  // Try multiple formats to ensure compatibility
   else if (request.text) {
-    // Send text field - backend should process this directly
-    requestWithContext.text = request.text.trim();
+    const trimmedText = request.text.trim();
     
-    // Also add text to context as latest USER message for consistency
-    // This ensures the backend has the text in both places
+    // Strategy 1: Send text field directly (most common)
+    requestWithContext.text = trimmedText;
+    
+    // Strategy 2: Also add to context as USER message (some backends expect this)
     if (context) {
-      // Append new user message to context
-      requestWithContext.context = context + '\n\nUSER: ' + request.text.trim();
+      requestWithContext.context = context + '\n\nUSER: ' + trimmedText;
     } else {
-      // If no context, create new context with just this message
-      requestWithContext.context = 'USER: ' + request.text.trim();
+      requestWithContext.context = 'USER: ' + trimmedText;
     }
     
+    // Strategy 3: Some backends expect 'input' or 'message' field instead of 'text'
+    // Uncomment if backend doesn't recognize 'text':
+    // requestWithContext.input = trimmedText;
+    // requestWithContext.message = trimmedText;
+    
     console.log('[API] Text-only mode: Sending text field and context');
-    console.log('[API] Text value:', request.text.trim());
+    console.log('[API] Text value:', trimmedText);
+    console.log('[API] Request keys:', Object.keys(requestWithContext));
   }
   
   // Add persona and rules (loaded from storage or provided in request)
