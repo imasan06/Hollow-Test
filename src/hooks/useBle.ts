@@ -127,6 +127,13 @@ export function useBle(): UseBleReturn {
         const encodeTime = performance.now() - encodeStart;
         console.log(`[Hook] [${sessionId}] WAV base64 length:`, wavBase64.length, `(${encodeTime.toFixed(2)}ms)`);
         
+        // Verify WAV format (first 20 chars should be "UklGRi" for base64 RIFF header)
+        const wavHeader = wavBase64.substring(0, 20);
+        console.log(`[Hook] [${sessionId}] WAV header (base64):`, wavHeader);
+        if (!wavHeader.startsWith('UklGRi')) {
+          console.warn(`[Hook] [${sessionId}] ⚠️ WAV header doesn't start with 'UklGRi' - format may be incorrect`);
+        }
+        
         // Log audio quality info
         if (samples.length > 0) {
           const maxSample = Math.max(...Array.from(samples).map(Math.abs));

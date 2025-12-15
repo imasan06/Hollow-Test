@@ -253,9 +253,9 @@ export function Settings() {
   }
 
   return (
-    <div className="flex min-h-screen flex-col bg-background">
+    <div className="flex min-h-screen flex-col bg-background safe-area-top">
       {/* Header */}
-      <header className="sticky top-0 z-10 border-b border-border bg-background/80 backdrop-blur-sm">
+      <header className="sticky top-0 z-10 border-b border-border bg-background/80 backdrop-blur-sm safe-area-top">
         <div className="container flex h-16 items-center gap-4 px-4">
           <Button
             variant="ghost"
@@ -272,13 +272,13 @@ export function Settings() {
       </header>
 
       {/* Main Content */}
-      <main className="container flex-1 py-6 px-4 max-w-3xl">
-        <div className="space-y-6">
+      <main className="container flex-1 py-8 px-4 max-w-4xl mx-auto">
+        <div className="space-y-8">
           {/* Preset Selector Card */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Persona Presets</CardTitle>
-              <CardDescription>
+          <Card className="border-border/60 shadow-sm">
+            <CardHeader className="pb-4">
+              <CardTitle className="text-lg">Persona Presets</CardTitle>
+              <CardDescription className="text-sm">
                 Create and manage multiple AI persona presets. The active preset is used for all AI requests.
               </CardDescription>
             </CardHeader>
@@ -339,10 +339,10 @@ export function Settings() {
           </Card>
 
           {/* Persona Card */}
-          <Card>
-            <CardHeader>
-              <CardTitle>AI Persona</CardTitle>
-              <CardDescription>
+          <Card className="border-border/60 shadow-sm">
+            <CardHeader className="pb-4">
+              <CardTitle className="text-lg">AI Persona</CardTitle>
+              <CardDescription className="text-sm">
                 Define how the AI should behave and respond. This persona is sent with every request.
               </CardDescription>
             </CardHeader>
@@ -355,7 +355,7 @@ export function Settings() {
                   value={persona}
                   onChange={(e) => setPersona(e.target.value)}
                   rows={6}
-                  className="font-mono text-sm"
+                  className="font-mono text-sm bg-background/50 border-border/60 focus:border-primary/50"
                 />
                 <p className="text-xs text-muted-foreground">
                   This text is included in every AI request to define the assistant's behavior.
@@ -365,10 +365,10 @@ export function Settings() {
           </Card>
 
           {/* Rules Card */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Rules</CardTitle>
-              <CardDescription>
+          <Card className="border-border/60 shadow-sm">
+            <CardHeader className="pb-4">
+              <CardTitle className="text-lg">Rules</CardTitle>
+              <CardDescription className="text-sm">
                 Optional rules that override or extend the base persona behavior.
               </CardDescription>
             </CardHeader>
@@ -381,17 +381,17 @@ export function Settings() {
                   value={rules}
                   onChange={(e) => setRules(e.target.value)}
                   rows={4}
-                  className="font-mono text-sm"
+                  className="font-mono text-sm bg-background/50 border-border/60 focus:border-primary/50"
                 />
               </div>
             </CardContent>
           </Card>
 
           {/* Base Rules Card */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Base Rules</CardTitle>
-              <CardDescription>
+          <Card className="border-border/60 shadow-sm">
+            <CardHeader className="pb-4">
+              <CardTitle className="text-lg">Base Rules</CardTitle>
+              <CardDescription className="text-sm">
                 Fundamental rules that apply before persona and custom rules.
               </CardDescription>
             </CardHeader>
@@ -404,18 +404,18 @@ export function Settings() {
                   value={baserules}
                   onChange={(e) => setBaserules(e.target.value)}
                   rows={4}
-                  className="font-mono text-sm"
+                  className="font-mono text-sm bg-background/50 border-border/60 focus:border-primary/50"
                 />
               </div>
             </CardContent>
           </Card>
 
           {/* Actions */}
-          <div className="flex gap-4">
+          <div className="flex gap-3 pt-2">
             <Button
               onClick={handleSave}
               disabled={isSaving}
-              className="flex-1"
+              className="flex-1 h-11"
             >
               <Save className="h-4 w-4 mr-2" />
               Save Settings
@@ -424,6 +424,7 @@ export function Settings() {
               variant="outline"
               onClick={handleReset}
               disabled={isSaving}
+              className="h-11"
             >
               <RotateCcw className="h-4 w-4 mr-2" />
               Reset
@@ -431,10 +432,10 @@ export function Settings() {
           </div>
 
           {/* Info */}
-          <Card className="bg-muted/50">
+          <Card className="bg-muted/30 border-border/60 shadow-sm">
             <CardContent className="pt-6">
-              <p className="text-sm text-muted-foreground">
-                <strong>Note:</strong> Settings are stored locally on your device. The active preset is automatically
+              <p className="text-sm text-muted-foreground leading-relaxed">
+                <strong className="text-foreground/90">Note:</strong> Settings are stored locally on your device. The active preset is automatically
                 included with every AI request. You can also receive persona updates from the watch via BLE.
               </p>
             </CardContent>

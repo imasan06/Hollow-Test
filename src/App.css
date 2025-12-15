@@ -2,8 +2,12 @@
 
 html, body, #root {
   height: 100%;
+  width: 100%;
+  overflow-x: hidden;
   overscroll-behavior: none;
   -webkit-overflow-scrolling: touch;
+  /* Prevent zoom on double tap */
+  touch-action: pan-x pan-y;
 }
 
 /* Safe area padding for mobile devices */

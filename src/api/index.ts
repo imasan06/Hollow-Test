@@ -55,9 +55,16 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
   const requestWithContext: any = {};
   
   // For audio requests (real mode): send audio + context (exact format backend expects)
-  // If both audio and text are provided (testing mode), send both
+  // IMPORTANT: Backend expects audio to be transcribed, then uses transcription as input
   if (request.audio) {
     requestWithContext.audio = request.audio;
+    
+    // Log audio details for debugging
+    console.log('[API] Audio details:', {
+      base64Length: request.audio.length,
+      estimatedBytes: Math.floor(request.audio.length * 0.75), // Base64 is ~33% larger
+      startsWith: request.audio.substring(0, 20),
+    });
     
     // If text is also provided (testing mode), include it
     // This allows testing: audio will be transcribed as empty, but text provides the input
@@ -71,9 +78,12 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
       }
     } else {
       // Normal audio mode: just include context as-is
+      // Backend should transcribe audio and use transcription as the user input
       if (context) {
         requestWithContext.context = context;
       }
+      // NOTE: Backend should extract transcription from audio and add it to context
+      // If backend doesn't do this automatically, we may need to handle it differently
     }
   } 
   // For text requests (testing): 
@@ -185,6 +195,14 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
           : nativeResponse.data;
         
         console.log('[API] CapacitorHttp response data keys:', Object.keys(data));
+        console.log('[API] Response data:', {
+          hasText: !!data.text,
+          hasAnswer: !!data.answer,
+          hasTranscription: !!data.transcription,
+          hasError: !!data.error,
+          transcription: data.transcription?.substring(0, 100),
+          error: data.error,
+        });
         
         // Normalize response: backend may return "answer" or "text"
         const normalizedData: TranscribeResponse = {
@@ -192,6 +210,13 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
           transcription: data.transcription,
           error: data.error,
         };
+        
+        // Log transcription if available (critical for debugging)
+        if (data.transcription) {
+          console.log('[API] ✅ Transcription received:', data.transcription);
+        } else {
+          console.warn('[API] ⚠️ No transcription in response - backend may not have transcribed audio');
+        }
         
         console.log('[API] Received response:', normalizedData.text?.substring(0, 100) + '...');
         

@@ -330,6 +330,7 @@ class BleManager {
   /**
    * Send AI response text to watch
    * This is separate from sendTime() to avoid routing confusion
+   * Fragments long messages into chunks (BLE limit is ~512 bytes per write)
    */
   async sendText(text: string): Promise<void> {
     if (this.mockMode) {
@@ -342,20 +343,55 @@ class BleManager {
     }
 
     console.log('[BLE] Sending AI text response:', text.substring(0, 50) + '...');
+    console.log('[BLE] Text length:', text.length, 'bytes');
 
     try {
       const encoder = new TextEncoder();
-      const data = encoder.encode(text);
-      const dataView = new DataView(data.buffer, data.byteOffset, data.byteLength);
+      const fullData = encoder.encode(text);
+      const maxChunkSize = 400; // Conservative limit (512 - overhead for BLE)
       
-      await BleClient.write(
-        this.device.deviceId,
-        SERVICE_UUID,
-        TEXT_CHAR_UUID,
-        dataView
-      );
+      // If message fits in one chunk, send directly
+      if (fullData.length <= maxChunkSize) {
+        const dataView = new DataView(fullData.buffer, fullData.byteOffset, fullData.byteLength);
+        await BleClient.write(
+          this.device.deviceId,
+          SERVICE_UUID,
+          TEXT_CHAR_UUID,
+          dataView
+        );
+        console.log('[BLE] AI text sent successfully (single chunk)');
+        return;
+      }
 
-      console.log('[BLE] AI text sent successfully');
+      // Fragment message into chunks
+      console.log(`[BLE] Fragmenting message into ${Math.ceil(fullData.length / maxChunkSize)} chunks`);
+      let offset = 0;
+      let chunkIndex = 0;
+      
+      while (offset < fullData.length) {
+        const chunkSize = Math.min(maxChunkSize, fullData.length - offset);
+        const chunk = fullData.slice(offset, offset + chunkSize);
+        const dataView = new DataView(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+        
+        await BleClient.write(
+          this.device.deviceId,
+          SERVICE_UUID,
+          TEXT_CHAR_UUID,
+          dataView
+        );
+        
+        chunkIndex++;
+        offset += chunkSize;
+        
+        console.log(`[BLE] Sent chunk ${chunkIndex}/${Math.ceil(fullData.length / maxChunkSize)} (${chunkSize} bytes)`);
+        
+        // Small delay between chunks to avoid overwhelming the BLE stack
+        if (offset < fullData.length) {
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
+      }
+
+      console.log('[BLE] AI text sent successfully (fragmented)');
     } catch (error) {
       console.error('[BLE] Failed to send AI text:', error);
       this.callbacks?.onError?.('Failed to send response to watch');
