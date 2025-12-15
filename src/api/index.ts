@@ -175,6 +175,22 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
       console.log('[API] Native platform detected - using CapacitorHttp (bypasses CORS)');
       
       try {
+        // Log exact payload being sent (for debugging backend issues)
+        console.log('[API] 🔍 EXACT PAYLOAD BEING SENT:');
+        console.log('[API] Keys:', Object.keys(requestWithContext));
+        console.log('[API] Has audio?', !!requestWithContext.audio);
+        console.log('[API] Audio length:', requestWithContext.audio?.length || 0);
+        console.log('[API] Audio starts with:', requestWithContext.audio?.substring(0, 100) || 'N/A');
+        console.log('[API] Has text?', !!requestWithContext.text);
+        console.log('[API] Has context?', !!requestWithContext.context);
+        console.log('[API] Has persona?', !!requestWithContext.persona);
+        console.log('[API] Has sample_rate?', !!requestWithContext.sample_rate);
+        console.log('[API] sample_rate value:', requestWithContext.sample_rate);
+        console.log('[API] Has audio_format?', !!requestWithContext.audio_format);
+        console.log('[API] audio_format value:', requestWithContext.audio_format);
+        console.log('[API] Has channels?', !!requestWithContext.channels);
+        console.log('[API] channels value:', requestWithContext.channels);
+        
         const nativeResponse = await CapacitorHttp.request({
           method: 'POST',
           url: url,
@@ -219,18 +235,24 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
           errorValue: data.error ? `"${data.error}"` : 'null',
         });
         
-        // Normalize response: backend may return "answer" or "text"
+        // Normalize response: backend may return "answer" or "text", "transcription" or "transcript"
+        // Backend contract: { answer, transcription }
+        // Frontend accepts both for compatibility
+        const answer = data.answer ?? data.text ?? data.response ?? '';
+        const transcription = data.transcription ?? data.transcript ?? '';
+        
         const normalizedData: TranscribeResponse = {
-          text: data.text || data.answer || data.response || '',
-          transcription: data.transcription,
+          text: answer,
+          transcription: transcription,
           error: data.error,
         };
         
         // Log transcription if available (critical for debugging)
-        if (data.transcription) {
-          console.log('[API] ✅ Transcription received:', data.transcription);
+        if (transcription) {
+          console.log('[API] ✅ Transcription received:', transcription);
         } else {
           console.warn('[API] ⚠️ No transcription in response - backend may not have transcribed audio');
+          console.warn('[API] ⚠️ Check if backend received audio correctly');
         }
         
         // Log final normalized response
@@ -282,10 +304,14 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
     const data = await response.json();
     console.log('[API] Request completed successfully', `(${requestTime.toFixed(2)}ms)`);
     
-    // Normalize response: backend may return "answer" or "text"
+    // Normalize response: backend contract is { answer, transcription }
+    // Frontend accepts both for compatibility
+    const answer = data.answer ?? data.text ?? data.response ?? '';
+    const transcription = data.transcription ?? data.transcript ?? '';
+    
     const normalizedData: TranscribeResponse = {
-      text: data.text || data.answer || data.response || '',
-      transcription: data.transcription,
+      text: answer,
+      transcription: transcription,
       error: data.error,
     };
     
