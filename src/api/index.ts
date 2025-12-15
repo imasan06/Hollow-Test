@@ -123,34 +123,38 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
     requestWithContext.baserules = baserules;
   }
   
-  // Log the exact format being sent (for debugging)
-  console.log('[API] Request format (matching real mode):', {
-    hasAudio: !!requestWithContext.audio,
-    hasText: !!requestWithContext.text,
-    hasContext: !!requestWithContext.context,
-    contextLength: requestWithContext.context?.length || 0,
-    allKeys: Object.keys(requestWithContext),
-  });
-  
-  // Debug: Verify text is included
-  console.log('[API] Request payload debug:', {
-    hasText: !!requestWithContext.text,
-    textValue: requestWithContext.text,
-    textType: typeof requestWithContext.text,
-    allKeys: Object.keys(requestWithContext),
-  });
-
-  const logContent = request.text 
-    ? `text: ${request.text.substring(0, 100)}...`
-    : `audio: ${request.audio?.substring(0, 50)}...`;
-  console.log('[API] Sending to backend:', logContent);
-  
-  if (context) {
-    const contextLines = context.split('\n\n').length;
-    console.log(`[API] Including conversation context: ${contextLines} previous messages`);
-  } else {
-    console.log('[API] No conversation history available (first message)');
+  // Add audio metadata if audio is present
+  if (request.audio) {
+    requestWithContext.sample_rate = 8000; // 8kHz from watch
+    requestWithContext.audio_format = 'wav';
+    requestWithContext.channels = 1; // Mono
   }
+  
+  // Log complete request structure (without full audio base64)
+  const logPayload = { ...requestWithContext };
+  if (logPayload.audio) {
+    logPayload.audio = `[BASE64: ${logPayload.audio.length} chars] ${logPayload.audio.substring(0, 50)}...`;
+  }
+  
+  console.log('[API] ========== REQUEST TO BACKEND ==========');
+  console.log('[API] Endpoint:', API_ENDPOINT + '/transcribe');
+  console.log('[API] Payload keys:', Object.keys(requestWithContext));
+  console.log('[API] Payload structure:', JSON.stringify(logPayload, null, 2));
+  console.log('[API] Has audio:', !!requestWithContext.audio, requestWithContext.audio ? `(${requestWithContext.audio.length} chars base64)` : '');
+  console.log('[API] Has text:', !!requestWithContext.text, requestWithContext.text ? `("${requestWithContext.text}")` : '');
+  console.log('[API] Has context:', !!requestWithContext.context, requestWithContext.context ? `(${requestWithContext.context.length} chars)` : '');
+  console.log('[API] Context preview:', requestWithContext.context ? requestWithContext.context.substring(0, 200) + '...' : 'none');
+  console.log('[API] Has persona:', !!requestWithContext.persona, requestWithContext.persona ? `(${requestWithContext.persona.length} chars)` : '');
+  console.log('[API] Has rules:', !!requestWithContext.rules);
+  console.log('[API] Has baserules:', !!requestWithContext.baserules);
+  if (requestWithContext.audio) {
+    console.log('[API] Audio metadata:', {
+      sample_rate: requestWithContext.sample_rate,
+      audio_format: requestWithContext.audio_format,
+      channels: requestWithContext.channels,
+    });
+  }
+  console.log('[API] =========================================');
   
   try {
     const url = `${API_ENDPOINT}/transcribe`;
@@ -199,14 +203,20 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
           ? JSON.parse(nativeResponse.data) 
           : nativeResponse.data;
         
-        console.log('[API] CapacitorHttp response data keys:', Object.keys(data));
-        console.log('[API] Response data:', {
+        console.log('[API] ========== RESPONSE FROM BACKEND ==========');
+        console.log('[API] Status:', nativeResponse.status);
+        console.log('[API] Response data keys:', Object.keys(data));
+        console.log('[API] Full response structure:', JSON.stringify(data, null, 2));
+        console.log('[API] Response fields:', {
           hasText: !!data.text,
           hasAnswer: !!data.answer,
+          hasResponse: !!data.response,
           hasTranscription: !!data.transcription,
           hasError: !!data.error,
-          transcription: data.transcription?.substring(0, 100),
-          error: data.error,
+          textValue: data.text ? `"${data.text.substring(0, 100)}${data.text.length > 100 ? '...' : ''}"` : 'null',
+          answerValue: data.answer ? `"${data.answer.substring(0, 100)}${data.answer.length > 100 ? '...' : ''}"` : 'null',
+          transcriptionValue: data.transcription ? `"${data.transcription}"` : 'null',
+          errorValue: data.error ? `"${data.error}"` : 'null',
         });
         
         // Normalize response: backend may return "answer" or "text"
@@ -223,7 +233,17 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
           console.warn('[API] ⚠️ No transcription in response - backend may not have transcribed audio');
         }
         
-        console.log('[API] Received response:', normalizedData.text?.substring(0, 100) + '...');
+        // Log final normalized response
+        if (normalizedData.text) {
+          console.log('[API] ✅ Final response text:', normalizedData.text.substring(0, 200) + (normalizedData.text.length > 200 ? '...' : ''));
+        } else {
+          console.warn('[API] ⚠️ No response text - backend returned empty response');
+        }
+        
+        if (normalizedData.error) {
+          console.error('[API] ❌ Backend error:', normalizedData.error);
+        }
+        console.log('[API] ============================================');
         
         return normalizedData;
       } catch (nativeError: any) {
