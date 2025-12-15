@@ -25,15 +25,12 @@ export default defineConfig(({ mode }) => ({
     },
   },
   build: {
-    rollupOptions: {
-      external: [
-        // Capacitor plugins are native and should not be bundled
-        // They are resolved at runtime in Capacitor's native context
-        '@capacitor/preferences',
-        '@capacitor/core',
-        '@capacitor-community/bluetooth-le',
-        '@capacitor-community/http',
-      ],
+    // For Capacitor, we need to include Capacitor modules in the bundle
+    // Capacitor will intercept them at runtime and use native implementations
+    // The original error was likely due to CSS import order, not Capacitor modules
+    commonjsOptions: {
+      include: [/node_modules/],
+      transformMixedEsModules: true,
     },
   },
 }));
