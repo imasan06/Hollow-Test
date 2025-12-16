@@ -1,13 +1,8 @@
-/**
- * Audio Recorder Hook
- * 
- * Records audio from the device microphone and converts it to WAV base64
- * for transcription. Works on both web and mobile (Capacitor).
- */
 
 import { useState, useRef, useCallback } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { encodeWavBase64 } from '@/audio/wavEncoder';
+import { logger } from '@/utils/logger';
 
 export interface UseAudioRecorderReturn {
   isRecording: boolean;
@@ -18,18 +13,16 @@ export interface UseAudioRecorderReturn {
   error: string | null;
 }
 
-const SAMPLE_RATE = 8000; // 8kHz to match watch audio format
+const SAMPLE_RATE = 8000;
 
-/**
- * Convert AudioBuffer to Int16Array (PCM16)
- */
+
 function audioBufferToPCM16(audioBuffer: AudioBuffer): Int16Array {
   const length = audioBuffer.length;
   const pcm16 = new Int16Array(length);
-  const channelData = audioBuffer.getChannelData(0); // Use first channel
+  const channelData = audioBuffer.getChannelData(0);
 
   for (let i = 0; i < length; i++) {
-    // Convert float32 (-1.0 to 1.0) to int16 (-32768 to 32767)
+
     const sample = Math.max(-1, Math.min(1, channelData[i]));
     pcm16[i] = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
   }
@@ -37,9 +30,7 @@ function audioBufferToPCM16(audioBuffer: AudioBuffer): Int16Array {
   return pcm16;
 }
 
-/**
- * Record audio using MediaRecorder API (web and mobile)
- */
+
 export function useAudioRecorder(): UseAudioRecorderReturn {
   const [isRecording, setIsRecording] = useState(false);
   const [duration, setDuration] = useState(0);
@@ -57,7 +48,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
       audioChunksRef.current = [];
       setDuration(0);
 
-      // Request microphone access
+
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           sampleRate: SAMPLE_RATE,
@@ -69,33 +60,33 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
 
       streamRef.current = stream;
 
-      // Create MediaRecorder
-      const mimeType = MediaRecorder.isTypeSupported('audio/webm') 
-        ? 'audio/webm' 
+
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm')
+        ? 'audio/webm'
         : MediaRecorder.isTypeSupported('audio/ogg')
-        ? 'audio/ogg'
-        : 'audio/webm'; // Fallback
+          ? 'audio/ogg'
+          : 'audio/webm';
 
       const mediaRecorder = new MediaRecorder(stream, {
         mimeType,
-        audioBitsPerSecond: 16000, // 16kbps for 8kHz audio
+        audioBitsPerSecond: 16000,
       });
 
       mediaRecorderRef.current = mediaRecorder;
 
-      // Collect audio chunks
+
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
           audioChunksRef.current.push(event.data);
         }
       };
 
-      // Start recording
-      mediaRecorder.start(100); // Collect data every 100ms
+
+      mediaRecorder.start(100);
       setIsRecording(true);
       startTimeRef.current = Date.now();
 
-      // Update duration every 100ms
+
       durationIntervalRef.current = window.setInterval(() => {
         if (startTimeRef.current) {
           const elapsed = (Date.now() - startTimeRef.current) / 1000;
@@ -103,11 +94,11 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
         }
       }, 100);
 
-      console.log('[AudioRecorder] Started recording');
+      logger.debug('Started recording', 'AudioRecorder');
     } catch (err: any) {
-      console.error('[AudioRecorder] Failed to start recording:', err);
-      
-      // Provide more helpful error messages
+      logger.error('Failed to start recording', 'AudioRecorder', err instanceof Error ? err : new Error(String(err)));
+
+
       let errorMessage = 'Failed to start recording. ';
       if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
         errorMessage += 'Please grant microphone permission in your device settings.';
@@ -118,7 +109,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
       } else {
         errorMessage += err.message || 'Please grant microphone permission.';
       }
-      
+
       setError(errorMessage);
       setIsRecording(false);
     }
@@ -131,7 +122,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
         return;
       }
 
-      // Clear duration interval
+
       if (durationIntervalRef.current) {
         clearInterval(durationIntervalRef.current);
         durationIntervalRef.current = null;
@@ -141,34 +132,33 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
 
       mediaRecorderRef.current.onstop = async () => {
         try {
-          // Stop all tracks
+
           if (streamRef.current) {
             streamRef.current.getTracks().forEach(track => track.stop());
             streamRef.current = null;
           }
 
-          // Combine audio chunks
-          const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-          console.log('[AudioRecorder] Recording stopped, blob size:', audioBlob.size);
 
-          // Convert to WAV
+          const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+          logger.debug(`Recording stopped, blob size: ${audioBlob.size}`, 'AudioRecorder');
+
+
           const wavBase64 = await convertBlobToWav(audioBlob);
-          
+
           setIsRecording(false);
           setDuration(0);
           startTimeRef.current = null;
 
-          console.log('[AudioRecorder] Converted to WAV, base64 length:', wavBase64.length);
+          logger.debug(`Converted to WAV, base64 length: ${wavBase64.length}`, 'AudioRecorder');
           resolve({ wavBase64, duration: finalDuration });
         } catch (err: any) {
-          console.error('[AudioRecorder] Failed to process recording:', err);
+          logger.error('Failed to process recording', 'AudioRecorder', err instanceof Error ? err : new Error(String(err)));
           setError(err.message || 'Failed to process recording');
           setIsRecording(false);
           resolve(null);
         }
       };
 
-      // Stop recording
       mediaRecorderRef.current.stop();
       mediaRecorderRef.current = null;
     });
@@ -195,7 +185,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
     setDuration(0);
     setError(null);
     startTimeRef.current = null;
-    console.log('[AudioRecorder] Recording cancelled');
+    logger.debug('Recording cancelled', 'AudioRecorder');
   }, []);
 
   return {
@@ -208,9 +198,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
   };
 }
 
-/**
- * Convert audio Blob (webm/ogg) to WAV base64
- */
+
 async function convertBlobToWav(audioBlob: Blob): Promise<string> {
   // Create AudioContext
   const arrayBuffer = await audioBlob.arrayBuffer();
@@ -218,25 +206,23 @@ async function convertBlobToWav(audioBlob: Blob): Promise<string> {
     sampleRate: SAMPLE_RATE,
   });
 
-  // Decode audio
+
   const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
 
-  // Resample to 8kHz if needed
+
   let samples: Int16Array;
   if (audioBuffer.sampleRate !== SAMPLE_RATE) {
-    console.log(`[AudioRecorder] Resampling from ${audioBuffer.sampleRate}Hz to ${SAMPLE_RATE}Hz`);
+    logger.debug(`Resampling from ${audioBuffer.sampleRate}Hz to ${SAMPLE_RATE}Hz`, 'AudioRecorder');
     samples = resampleAudioBuffer(audioBuffer, SAMPLE_RATE);
   } else {
     samples = audioBufferToPCM16(audioBuffer);
   }
 
-  // Encode to WAV base64
+
   return encodeWavBase64(samples);
 }
 
-/**
- * Resample AudioBuffer to target sample rate
- */
+
 function resampleAudioBuffer(audioBuffer: AudioBuffer, targetSampleRate: number): Int16Array {
   const sourceSampleRate = audioBuffer.sampleRate;
   const ratio = sourceSampleRate / targetSampleRate;
@@ -251,7 +237,7 @@ function resampleAudioBuffer(audioBuffer: AudioBuffer, targetSampleRate: number)
     const sourceIndexCeil = Math.min(sourceIndexFloor + 1, sourceLength - 1);
     const t = sourceIndex - sourceIndexFloor;
 
-    // Linear interpolation
+
     const sample = channelData[sourceIndexFloor] * (1 - t) + channelData[sourceIndexCeil] * t;
     target[i] = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
   }

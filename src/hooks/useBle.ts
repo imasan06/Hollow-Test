@@ -8,6 +8,7 @@ import { toast } from '@/hooks/use-toast';
 import { APP_CONFIG } from '@/config/app.config';
 import { appendMessage } from '@/storage/conversationStore';
 import { timeSyncService } from '@/services/timeSyncService';
+import { logger } from '@/utils/logger';
 
 export interface UseBleReturn {
   connectionState: ConnectionState;
@@ -20,8 +21,9 @@ export interface UseBleReturn {
   scan: () => Promise<void>;
   disconnect: () => Promise<void>;
   deviceName: string | null;
-  sendTextMessage: (text: string) => Promise<void>; // For testing AI without watch
-  testWithAudio: (text: string) => Promise<void>; // Test with audio WAV (simulates real mode)
+  sendTextMessage: (text: string) => Promise<void>;
+  testWithAudio: (text: string) => Promise<void>;
+  processRecordedAudio: (wavBase64: string, duration: number) => Promise<void>;
 }
 
 export function useBle(): UseBleReturn {
@@ -33,25 +35,24 @@ export function useBle(): UseBleReturn {
   const [audioDuration, setAudioDuration] = useState(0);
   const [isProcessing, setIsProcessing] = useState(false);
   const [deviceName, setDeviceName] = useState<string | null>(null);
-  
+
   const isInitialized = useRef(false);
   const chunkCount = useRef(0);
-  
-  // Session isolation: track active session to prevent mixing requests/responses
-  const activeSessionId = useRef<string | null>(null);
-  const isProcessingRequest = useRef(false); // Lock: only one inflight request at a time
 
-  // Handle persona update from watch via BLE
+
+  const activeSessionId = useRef<string | null>(null);
+  const isProcessingRequest = useRef(false);
+
   const handlePersonaUpdateFromWatch = useCallback(async (data: string) => {
     try {
       const { upsertPresetByName, setActivePreset } = await import('@/storage/settingsStore');
-      
-      // Try to parse as JSON first (SET_PERSONA_JSON format)
+
+
       let presetData: any;
       try {
         presetData = JSON.parse(data);
       } catch {
-        // If not JSON, treat as legacy format (just persona text)
+
         presetData = {
           name: 'Watch Preset',
           persona: data,
@@ -59,26 +60,26 @@ export function useBle(): UseBleReturn {
           baseRules: '',
         };
       }
-      
-      // Ensure name exists
+
+
       if (!presetData.name) {
         presetData.name = 'Watch Preset';
       }
-      
-      // Upsert preset by name
+
+
       const preset = await upsertPresetByName(presetData);
-      
-      // Set as active
+
+
       await setActivePreset(preset.id);
-      
-      console.log('[Hook] Persona updated from watch:', preset.name);
-      
+
+      logger.debug(`Persona updated from watch: ${preset.name}`, 'Hook');
+
       toast({
         title: 'Persona Updated',
         description: `"${preset.name}" received from watch and set as active`,
       });
     } catch (error) {
-      console.error('[Hook] Failed to update persona from watch:', error);
+      logger.error('Failed to update persona from watch', 'Hook', error instanceof Error ? error : new Error(String(error)));
       toast({
         title: 'Error',
         description: 'Failed to update persona from watch',
@@ -89,161 +90,158 @@ export function useBle(): UseBleReturn {
 
   const processAudio = useCallback(
     async (adpcmData: Uint8Array, mode: 'VOICE' | 'SILENT') => {
-      // Session isolation: Check if another request is in progress
+
       if (isProcessingRequest.current) {
-        console.warn('[Hook] ⚠ Another request is in progress, ignoring this audio');
+        logger.warn('Another request is in progress, ignoring this audio', 'Hook');
         return;
       }
 
-      // Generate new session ID for this request
+
       const sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       activeSessionId.current = sessionId;
       isProcessingRequest.current = true;
 
       setIsProcessing(true);
       setVoiceState('processing');
-  
+
       try {
-        console.log(`[Hook] [${sessionId}] Processing ADPCM buffer, size:`, adpcmData.length);
-  
+        logger.debug(`Processing ADPCM buffer, size: ${adpcmData.length}`, 'Hook');
+
         if (adpcmData.length === 0) {
           throw new Error('No audio data received');
         }
-  
-        // Decode ADPCM to PCM16
+
+
         const decodeStart = performance.now();
         const { samples } = decodeImaAdpcm(adpcmData);
         const decodeTime = performance.now() - decodeStart;
-        console.log(`[Hook] [${sessionId}] Decoded to PCM samples:`, samples.length, `(${decodeTime.toFixed(2)}ms)`);
-  
-        // Calculate duration
+        logger.debug(`Decoded to PCM samples: ${samples.length} (${decodeTime.toFixed(2)}ms)`, 'Hook');
+
+
         const duration = getAudioDuration(samples.length);
         setAudioDuration(duration);
-        console.log(`[Hook] [${sessionId}] Audio duration:`, duration.toFixed(2), 'seconds');
-  
-        // Encode to WAV base64
+        logger.debug(`Audio duration: ${duration.toFixed(2)} seconds`, 'Hook');
+
         const encodeStart = performance.now();
         const wavBase64 = encodeWavBase64(samples);
         const encodeTime = performance.now() - encodeStart;
-        console.log(`[Hook] [${sessionId}] WAV base64 length:`, wavBase64.length, `(${encodeTime.toFixed(2)}ms)`);
-        
-        // Verify WAV format (first 20 chars should be "UklGRi" for base64 RIFF header)
+        logger.debug(`WAV base64 length: ${wavBase64.length} (${encodeTime.toFixed(2)}ms)`, 'Hook');
+
+
         const wavHeader = wavBase64.substring(0, 20);
-        console.log(`[Hook] [${sessionId}] WAV header (base64):`, wavHeader);
+        logger.debug(`WAV header (base64): ${wavHeader}`, 'Hook');
         if (!wavHeader.startsWith('UklGRi')) {
-          console.warn(`[Hook] [${sessionId}] ⚠️ WAV header doesn't start with 'UklGRi' - format may be incorrect`);
+          logger.warn("WAV header doesn't start with 'UklGRi' - format may be incorrect", 'Hook');
         }
-        
-        // Log audio quality info
+
+
         if (samples.length > 0) {
           const maxSample = Math.max(...Array.from(samples).map(Math.abs));
           const avgSample = Math.abs(Array.from(samples).reduce((a, b) => a + Math.abs(b), 0) / samples.length);
-          console.log(`[Hook] [${sessionId}] Audio quality - Max: ${maxSample}, Avg: ${avgSample.toFixed(0)}`);
+          logger.debug(`Audio quality - Max: ${maxSample}, Avg: ${avgSample.toFixed(0)}`, 'Hook');
         }
 
-        // In demo/mock mode, skip network call to avoid CORS/backends
+
         let apiResponse: { transcription?: string; text: string; error?: string };
-        
+
         if (APP_CONFIG.BLE_MOCK_MODE) {
-          // Mock response - still save to conversation history
-          // In mock mode, we still prepare context (for testing) but don't send it
+
           const { formatConversationContext } = await import('@/storage/conversationStore');
           const mockContext = await formatConversationContext();
           if (mockContext) {
-            console.log(`[Hook] [${sessionId}] Mock mode: Context available but not sent (mock response)`);
-            console.log(`[Hook] [${sessionId}] Mock mode: Context has ${mockContext.split('\n\n').length} previous messages`);
+            logger.debug(`Mock mode: Context available but not sent (mock response)`, 'Hook');
+            logger.debug(`Mock mode: Context has ${mockContext.split('\n\n').length} previous messages`, 'Hook');
           }
-          
-          apiResponse = { 
-            transcription: 'Demo audio (sine wave 440Hz)', 
-            text: 'Hi, this is a demo response.' 
+
+          apiResponse = {
+            transcription: 'Demo audio (sine wave 440Hz)',
+            text: 'Hi, this is a demo response.'
           };
-          console.log(`[Hook] [${sessionId}] Mock mode: Using hardcoded response`);
+          logger.debug('Mock mode: Using hardcoded response', 'Hook');
         } else {
-              toast({
-                title: 'Processing...',
-                description: 'Sending audio for transcription and AI response',
-              });
-          
-          // Check if session is still active before sending (prevent stale requests)
+          toast({
+            title: 'Processing...',
+            description: 'Sending audio for transcription and AI response',
+          });
+
+
           if (activeSessionId.current !== sessionId) {
-            console.warn(`[Hook] [${sessionId}] Session changed, aborting request`);
+            logger.warn('Session changed, aborting request', 'Hook');
             return;
           }
-          
+
           apiResponse = await sendTranscription({ audio: wavBase64 });
         }
-  
-        // Check if session is still active before processing response
+
+
         if (activeSessionId.current !== sessionId) {
-          console.warn(`[Hook] [${sessionId}] ⚠ Response received but session changed (stale response ignored)`);
+          logger.warn('Response received but session changed (stale response ignored)', 'Hook');
           return;
         }
-  
+
         if (apiResponse.error) {
           throw new Error(apiResponse.error);
         }
-  
-        // Save user transcription to conversation history
+
+
         if (apiResponse.transcription) {
           setLastTranscription(apiResponse.transcription);
-          console.log(`[Hook] [${sessionId}] Transcription:`, apiResponse.transcription);
-          
-          // Save user message to conversation history
+          logger.debug(`Transcription: ${apiResponse.transcription}`, 'Hook');
+
+
           await appendMessage({
             role: 'user',
             text: apiResponse.transcription,
             timestamp: Date.now(),
           });
         }
-  
+
         setLastResponse(apiResponse.text);
         setVoiceState('responding');
-  
-        console.log(`[Hook] [${sessionId}] AI Response received:`, apiResponse.text);
-        console.log(`[Hook] [${sessionId}] Response will be displayed in UI and sent to watch`);
-  
-        // Save AI response to conversation history
+
+        logger.debug(`AI Response received: ${apiResponse.text?.substring(0, 100)}`, 'Hook');
+
+
         if (apiResponse.text) {
           await appendMessage({
             role: 'assistant',
             text: apiResponse.text,
             timestamp: Date.now(),
           });
-          console.log(`[Hook] [${sessionId}] AI response saved to conversation history`);
+          logger.debug('AI response saved to conversation history', 'Hook');
         }
-  
-        // Send LLM response to watch (only if session is still active)
+
+
         if (activeSessionId.current === sessionId) {
           await bleManager.sendAiText(apiResponse.text);
-          console.log(`[Hook] [${sessionId}] Response sent to watch via BLE`);
+          logger.debug('Response sent to watch via BLE', 'Hook');
         } else {
-          console.warn(`[Hook] [${sessionId}] ⚠ Session changed, not sending response to watch`);
+          logger.warn('Session changed, not sending response to watch', 'Hook');
         }
-  
+
         toast({
           title: 'Done',
           description: 'Response sent to watch',
         });
       } catch (error) {
-        // Only show error if this is still the active session
+
         if (activeSessionId.current === sessionId) {
-          console.error(`[Hook] [${sessionId}] Audio processing failed:`, error);
-        const errorMessage = error instanceof Error ? error.message : 'Processing failed';
-        setLastError(errorMessage);
-        toast({
-          title: 'Processing Error',
-          description: errorMessage,
-          variant: 'destructive',
-        });
+          logger.error('Audio processing failed', 'Hook', error instanceof Error ? error : new Error(String(error)));
+          const errorMessage = error instanceof Error ? error.message : 'Processing failed';
+          setLastError(errorMessage);
+          toast({
+            title: 'Processing Error',
+            description: errorMessage,
+            variant: 'destructive',
+          });
         } else {
-          console.warn(`[Hook] [${sessionId}] Error in stale session, ignoring`);
+          logger.warn('Error in stale session, ignoring', 'Hook');
         }
       } finally {
-        // Only reset if this is still the active session
+
         if (activeSessionId.current === sessionId) {
-        setIsProcessing(false);
-        setVoiceState('idle');
+          setIsProcessing(false);
+          setVoiceState('idle');
           isProcessingRequest.current = false;
         }
         chunkCount.current = 0;
@@ -251,7 +249,7 @@ export function useBle(): UseBleReturn {
     },
     []
   );
-  
+
 
   const initializeBle = useCallback(async () => {
     if (isInitialized.current) return;
@@ -261,25 +259,25 @@ export function useBle(): UseBleReturn {
         onConnectionStateChange: (state) => {
           setConnectionState(state);
           setDeviceName(bleManager.getDeviceName());
-      
+
           if (state === 'connected') {
-            // Start time sync service when connected
+
             timeSyncService.start();
-            console.log('[Hook] TimeSyncService started');
-            
+            logger.debug('TimeSyncService started', 'Hook');
+
             toast({
               title: 'Connected',
               description: `Connected to ${bleManager.getDeviceName() || 'watch'}`,
             });
           } else if (state === 'disconnected') {
-            // Stop time sync service when disconnected
+
             timeSyncService.stop();
-            console.log('[Hook] TimeSyncService stopped');
-            
-            // Reset session isolation
+            logger.debug('TimeSyncService stopped', 'Hook');
+
+
             activeSessionId.current = null;
             isProcessingRequest.current = false;
-            
+
             setVoiceState('idle');
           }
         },
@@ -289,45 +287,47 @@ export function useBle(): UseBleReturn {
         },
         onAudioData: (data) => {
           chunkCount.current++;
-          // Update duration estimate during recording
+
           const estimatedSamples = chunkCount.current * data.length * 2;
           setAudioDuration(getAudioDuration(estimatedSamples));
         },
-       
+
         onAudioComplete: (adpcmData, mode) => {
-          console.log('[Hook] onAudioComplete called. Mode:', mode);
+          logger.debug(`onAudioComplete called. Mode: ${mode}`, 'Hook');
           processAudio(adpcmData, mode);
         },
         onTimeRequest: () => {
-          console.log('[Hook] Time requested by watch (REQ_TIME)');
-          // Delegate to TimeSyncService
+          logger.debug('Time requested by watch (REQ_TIME)', 'Hook');
+
           timeSyncService.handleTimeRequest();
         },
         onControlMessage: (command, data) => {
-          console.log('[Hook] Control message received:', command, data);
-          // Handle SET_PERSONA_JSON command from watch
+          logger.debug(`Control message received: ${command}`, 'Hook');
+
           if ((command === 'SET_PERSONA_JSON' || command === 'SET_PERSONA') && data) {
             if (command === 'SET_PERSONA' && !data.startsWith('{')) {
-              // Legacy format support (fallback)
-              console.warn('[Hook] Legacy SET_PERSONA format received, consider using SET_PERSONA_JSON');
+              logger.warn('Legacy SET_PERSONA format received, consider using SET_PERSONA_JSON', 'Hook');
             }
             handlePersonaUpdateFromWatch(data);
           }
         },
         onError: (error) => {
           setLastError(error);
-          toast({
-            title: 'Bluetooth Error',
-            description: error,
-            variant: 'destructive',
-          });
+
+          if (!error.toLowerCase().includes('cancelled') && !error.toLowerCase().includes('cancel')) {
+            toast({
+              title: 'Bluetooth Error',
+              description: error,
+              variant: 'destructive',
+            });
+          }
         },
       });
-      
-      
+
+
       isInitialized.current = true;
     } catch (error) {
-      console.error('[Hook] BLE initialization failed:', error);
+      logger.error('BLE initialization failed', 'Hook', error instanceof Error ? error : new Error(String(error)));
     }
   }, [processAudio, handlePersonaUpdateFromWatch]);
 
@@ -338,13 +338,13 @@ export function useBle(): UseBleReturn {
   }, [initializeBle]);
 
   const disconnect = useCallback(async () => {
-    // Stop time sync service
+
     timeSyncService.stop();
-    
-    // Reset session isolation
+
+
     activeSessionId.current = null;
     isProcessingRequest.current = false;
-    
+
     await bleManager.disconnect();
     setLastResponse(null);
     setLastTranscription(null);
@@ -352,12 +352,17 @@ export function useBle(): UseBleReturn {
     setAudioDuration(0);
   }, []);
 
-  /**
-   * Test AI by sending audio WAV base64 (simulates real mode exactly)
-   * This creates a silent/minimal audio WAV and sends it to backend
-   * The backend will transcribe it (might be empty/silent) and respond
-   * This is the most reliable way to test because it uses the exact same flow as real mode
-   */
+
+  useEffect(() => {
+    if (lastError && (lastError.toLowerCase().includes('cancelled') || lastError.toLowerCase().includes('cancel'))) {
+      const timer = setTimeout(() => {
+        setLastError(null);
+      }, 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [lastError]);
+
+
   const testWithAudio = useCallback(async (text: string) => {
     if (!text.trim()) {
       toast({
@@ -373,58 +378,54 @@ export function useBle(): UseBleReturn {
     setLastError(null);
 
     try {
-      console.log('[Hook] Testing with audio WAV (simulating real mode):', text);
-      
+      logger.debug(`Testing with audio WAV (simulating real mode): ${text}`, 'Hook');
+
       toast({
         title: 'Processing...',
         description: 'Sending audio to backend (test mode)',
       });
 
-      // Generate real audio from text using Text-to-Speech
-      // This creates audio that the backend can actually transcribe
-      console.log('[Hook] Generating audio from text using TTS...');
+
+      logger.debug('Generating audio from text using TTS', 'Hook');
       let wavBase64: string;
-      
+
       try {
-        // Try to generate audio using TTS
-        // Note: This requires microphone permission to capture system audio
+
         wavBase64 = await textToSpeechWavSimple(text.trim());
-        console.log('[Hook] Generated audio WAV from text, base64 length:', wavBase64.length);
+        logger.debug(`Generated audio WAV from text, base64 length: ${wavBase64.length}`, 'Hook');
       } catch (ttsError) {
-        console.warn('[Hook] TTS failed (may need microphone permission), sending text directly instead:', ttsError);
-        // Fallback: send text directly WITHOUT audio
-        // The backend ignores 'text' field when 'audio' is present, so we skip audio entirely
-        // This simulates the backend processing text directly (as if it was transcribed from audio)
-        const apiResponse = await sendTranscription({ 
-          text: text.trim() // Send only text, no audio
+        logger.warn('TTS failed (may need microphone permission), sending text directly instead', 'Hook');
+
+        const apiResponse = await sendTranscription({
+          text: text.trim()
         });
-        
+
         if (apiResponse.error) {
           throw new Error(apiResponse.error);
         }
 
-        // Save user message to conversation history
+
         setLastTranscription(text.trim());
         await appendMessage({
           role: 'user',
           text: text.trim(),
           timestamp: Date.now(),
         });
-        console.log('[Hook] User message saved to conversation history');
+        logger.debug('User message saved to conversation history', 'Hook');
 
-        // Set AI response
+
         setLastResponse(apiResponse.text);
         setVoiceState('responding');
-        console.log('[Hook] AI Response received:', apiResponse.text);
+        logger.debug(`AI Response received: ${apiResponse.text?.substring(0, 100)}`, 'Hook');
 
-        // Save AI response to conversation history
+
         if (apiResponse.text) {
           await appendMessage({
             role: 'assistant',
             text: apiResponse.text,
             timestamp: Date.now(),
           });
-          console.log('[Hook] AI response saved to conversation history');
+          logger.debug('AI response saved to conversation history', 'Hook');
         }
 
         toast({
@@ -435,45 +436,44 @@ export function useBle(): UseBleReturn {
         return;
       }
 
-      // Send audio to backend (exact same format as real mode)
-      // The backend will transcribe the audio and get the text we generated
+
       const apiResponse = await sendTranscription({ audio: wavBase64 });
 
       if (apiResponse.error) {
         throw new Error(apiResponse.error);
       }
 
-      // Save user message to conversation history (using the text we wanted to test)
+
       setLastTranscription(text.trim());
       await appendMessage({
         role: 'user',
         text: text.trim(),
         timestamp: Date.now(),
       });
-      console.log('[Hook] User message saved to conversation history');
+        logger.debug('User message saved to conversation history', 'Hook');
 
-      // Set AI response
+
       setLastResponse(apiResponse.text);
       setVoiceState('responding');
-      console.log('[Hook] AI Response received:', apiResponse.text);
+        logger.debug(`AI Response received: ${apiResponse.text?.substring(0, 100)}`, 'Hook');
 
-      // Save AI response to conversation history
+
       if (apiResponse.text) {
         await appendMessage({
           role: 'assistant',
           text: apiResponse.text,
           timestamp: Date.now(),
         });
-        console.log('[Hook] AI response saved to conversation history');
+        logger.debug('AI response saved to conversation history', 'Hook');
       }
 
-      // Send response to watch if connected (for testWithAudio mode)
+
       if (connectionState === 'connected') {
         try {
           await bleManager.sendAiText(apiResponse.text);
-          console.log('[Hook] Test response sent to watch via BLE');
+          logger.debug('Test response sent to watch via BLE', 'Hook');
         } catch (error) {
-          console.warn('[Hook] Failed to send test response to watch:', error);
+          logger.warn('Failed to send test response to watch', 'Hook');
         }
       }
 
@@ -483,7 +483,7 @@ export function useBle(): UseBleReturn {
       });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to get AI response';
-      console.error('[Hook] Test with audio failed:', errorMessage);
+      logger.error('Test with audio failed', 'Hook', new Error(errorMessage));
       setLastError(errorMessage);
       setVoiceState('idle');
       toast({
@@ -496,10 +496,7 @@ export function useBle(): UseBleReturn {
     }
   }, []);
 
-  /**
-   * Send text message directly to backend (for testing AI without watch)
-   * This bypasses BLE and audio processing, sending text directly
-   */
+
   const sendTextMessage = useCallback(async (text: string) => {
     if (!text.trim()) {
       toast({
@@ -515,42 +512,42 @@ export function useBle(): UseBleReturn {
     setLastError(null);
 
     try {
-      console.log('[Hook] Sending text message to backend:', text);
-      
+      logger.debug(`Sending text message to backend: ${text}`, 'Hook');
+
       toast({
         title: 'Processing...',
         description: 'Sending message to AI backend',
       });
 
-      // Send text directly to backend (includes context automatically)
+
       const apiResponse = await sendTranscription({ text: text.trim() });
 
       if (apiResponse.error) {
         throw new Error(apiResponse.error);
       }
 
-      // Save user message to conversation history
+
       setLastTranscription(text.trim());
       await appendMessage({
         role: 'user',
         text: text.trim(),
         timestamp: Date.now(),
       });
-      console.log('[Hook] User message saved to conversation history');
+        logger.debug('User message saved to conversation history', 'Hook');
 
-      // Set AI response
+
       setLastResponse(apiResponse.text);
       setVoiceState('responding');
-      console.log('[Hook] AI Response received:', apiResponse.text);
+        logger.debug(`AI Response received: ${apiResponse.text?.substring(0, 100)}`, 'Hook');
 
-      // Save AI response to conversation history
+
       if (apiResponse.text) {
         await appendMessage({
           role: 'assistant',
           text: apiResponse.text,
           timestamp: Date.now(),
         });
-        console.log('[Hook] AI response saved to conversation history');
+        logger.debug('AI response saved to conversation history', 'Hook');
       }
 
       toast({
@@ -558,7 +555,7 @@ export function useBle(): UseBleReturn {
         description: 'AI response received',
       });
     } catch (error) {
-      console.error('[Hook] Text message failed:', error);
+      logger.error('Text message failed', 'Hook', error instanceof Error ? error : new Error(String(error)));
       const errorMessage = error instanceof Error ? error.message : 'Failed to send message';
       setLastError(errorMessage);
       toast({
@@ -572,12 +569,100 @@ export function useBle(): UseBleReturn {
     }
   }, []);
 
-  // Initialize on mount
+  const processRecordedAudio = useCallback(async (wavBase64: string, duration: number) => {
+    if (isProcessingRequest.current) {
+      logger.warn('Another request is in progress, ignoring this audio', 'Hook');
+      return;
+    }
+
+    const sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    activeSessionId.current = sessionId;
+    isProcessingRequest.current = true;
+
+    setIsProcessing(true);
+    setVoiceState('processing');
+    setLastError(null);
+    setAudioDuration(duration);
+
+    try {
+      logger.debug(`Processing recorded audio, WAV base64 length: ${wavBase64.length}`, 'Hook');
+      logger.debug(`Audio duration: ${duration.toFixed(2)} seconds`, 'Hook');
+
+      toast({
+        title: 'Processing...',
+        description: 'Transcribing audio and sending to AI',
+      });
+
+      const apiResponse = await sendTranscription({ audio: wavBase64 });
+
+      if (activeSessionId.current !== sessionId) {
+        logger.warn('Response received but session changed (stale response ignored)', 'Hook');
+        return;
+      }
+
+      if (apiResponse.error) {
+        throw new Error(apiResponse.error);
+      }
+
+      const transcribedText = apiResponse.transcription || apiResponse.text || '';
+      if (transcribedText) {
+        setLastTranscription(transcribedText);
+        await appendMessage({
+          role: 'user',
+          text: transcribedText,
+          timestamp: Date.now(),
+        });
+        logger.debug(`User message saved to conversation history: ${transcribedText}`, 'Hook');
+      }
+
+      setLastResponse(apiResponse.text);
+      setVoiceState('responding');
+      logger.debug(`AI Response received: ${apiResponse.text?.substring(0, 100)}`, 'Hook');
+
+      if (apiResponse.text) {
+        await appendMessage({
+          role: 'assistant',
+          text: apiResponse.text,
+          timestamp: Date.now(),
+        });
+        logger.debug('AI response saved to conversation history', 'Hook');
+      }
+
+      if (activeSessionId.current === sessionId && connectionState === 'connected') {
+        await bleManager.sendAiText(apiResponse.text);
+        logger.debug('Response sent to watch via BLE', 'Hook');
+      }
+
+      toast({
+        title: 'Done',
+        description: 'AI response received',
+      });
+    } catch (error) {
+      if (activeSessionId.current === sessionId) {
+        logger.error('Failed to process recorded audio', 'Hook', error instanceof Error ? error : new Error(String(error)));
+        const errorMessage = error instanceof Error ? error.message : 'Failed to process audio';
+        setLastError(errorMessage);
+        toast({
+          title: 'Error',
+          description: errorMessage,
+          variant: 'destructive',
+        });
+      }
+    } finally {
+      if (activeSessionId.current === sessionId) {
+        setIsProcessing(false);
+        setVoiceState('idle');
+        isProcessingRequest.current = false;
+      }
+    }
+  }, [connectionState]);
+
+
   useEffect(() => {
     initializeBle();
-    
+
     return () => {
-      // Cleanup: stop time sync and disconnect
+
       timeSyncService.stop();
       bleManager.disconnect();
       activeSessionId.current = null;
@@ -598,5 +683,6 @@ export function useBle(): UseBleReturn {
     deviceName,
     sendTextMessage,
     testWithAudio,
+    processRecordedAudio,
   };
 }

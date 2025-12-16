@@ -1,8 +1,3 @@
-/**
- * BLE Message Types
- * 
- * Defines message routing types to separate TIME sync from AI responses
- */
 
 export type BleMessageType = 'audio' | 'ai_text' | 'control' | 'time';
 

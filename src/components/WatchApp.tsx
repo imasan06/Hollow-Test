@@ -1,18 +1,16 @@
-import { useState } from 'react';
+import { useEffect } from 'react';
 import { useBle } from '@/hooks/useBle';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { StatusIndicator } from '@/components/ui/StatusIndicator';
 import { VoiceVisualizer } from '@/components/ui/VoiceVisualizer';
 import { ResponseCard } from '@/components/ui/ResponseCard';
-import { Bluetooth, BluetoothOff, Watch, Wifi, Settings, Send } from 'lucide-react';
+import { Bluetooth, BluetoothOff, Watch, Wifi, Settings } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { Badge } from '@/components/ui/badge';
 import { APP_CONFIG } from '@/config/app.config';
 
 export function WatchApp() {
   const navigate = useNavigate();
-  const [testText, setTestText] = useState('');
   const {
     connectionState,
     voiceState,
@@ -24,16 +22,9 @@ export function WatchApp() {
     scan,
     disconnect,
     deviceName,
-    sendTextMessage,
   } = useBle();
   const isConnected = connectionState === 'connected';
   const isScanning = connectionState === 'scanning' || connectionState === 'connecting';
-
-  const handleSendText = async () => {
-    if (!testText.trim() || isProcessing) return;
-    await sendTextMessage(testText);
-    setTestText('');
-  };
 
 
   return (
@@ -90,36 +81,6 @@ export function WatchApp() {
           response={lastResponse}
           error={lastError}
         />
-
-        {/* Test Text Input */}
-        <div className="w-full max-w-md px-4 space-y-2">
-          <div className="flex gap-2">
-            <Input
-              type="text"
-              placeholder="Test AI with text..."
-              value={testText}
-              onChange={(e) => setTestText(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSendText();
-                }
-              }}
-              disabled={isProcessing}
-              className="flex-1"
-            />
-            <Button
-              onClick={handleSendText}
-              disabled={!testText.trim() || isProcessing}
-              size="icon"
-            >
-              <Send className="h-4 w-4" />
-            </Button>
-          </div>
-          <p className="text-xs text-muted-foreground text-center">
-            Test the AI backend without the watch
-          </p>
-        </div>
 
         {/* Connection Controls */}
         <div className="flex flex-col items-center gap-4">

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { logger } from '@/utils/logger';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
@@ -55,7 +56,7 @@ export function Settings() {
       setRules(active.rules || '');
       setBaserules(active.baseRules || '');
     } catch (error) {
-      console.error('[Settings] Failed to load settings:', error);
+      logger.error('Failed to load settings', 'Settings', error instanceof Error ? error : new Error(String(error)));
       toast({
         title: 'Error',
         description: 'Failed to load settings',
@@ -82,7 +83,7 @@ export function Settings() {
         });
       }
     } catch (error) {
-      console.error('[Settings] Failed to change preset:', error);
+      logger.error('Failed to change preset', 'Settings', error instanceof Error ? error : new Error(String(error)));
       toast({
         title: 'Error',
         description: 'Failed to change preset',
@@ -111,7 +112,7 @@ export function Settings() {
         description: `"${currentPreset.name}" has been saved`,
       });
     } catch (error) {
-      console.error('[Settings] Failed to save settings:', error);
+      logger.error('Failed to save settings', 'Settings', error instanceof Error ? error : new Error(String(error)));
       toast({
         title: 'Error',
         description: 'Failed to save settings',
@@ -137,7 +138,7 @@ export function Settings() {
         description: `"${currentPreset.name}" has been reset to defaults`,
       });
     } catch (error) {
-      console.error('[Settings] Failed to reset preset:', error);
+      logger.error('Failed to reset preset', 'Settings', error instanceof Error ? error : new Error(String(error)));
       toast({
         title: 'Error',
         description: 'Failed to reset preset',
@@ -156,7 +157,7 @@ export function Settings() {
         description: `Created "${newPreset.name}"`,
       });
     } catch (error) {
-      console.error('[Settings] Failed to create preset:', error);
+      logger.error('Failed to create preset', 'Settings', error instanceof Error ? error : new Error(String(error)));
       toast({
         title: 'Error',
         description: 'Failed to create preset',
@@ -177,7 +178,7 @@ export function Settings() {
         description: `Created "${duplicated.name}"`,
       });
     } catch (error) {
-      console.error('[Settings] Failed to duplicate preset:', error);
+      logger.error('Failed to duplicate preset', 'Settings', error instanceof Error ? error : new Error(String(error)));
       toast({
         title: 'Error',
         description: 'Failed to duplicate preset',
@@ -199,7 +200,7 @@ export function Settings() {
         description: `Renamed to "${newName.trim()}"`,
       });
     } catch (error) {
-      console.error('[Settings] Failed to rename preset:', error);
+      logger.error('Failed to rename preset', 'Settings', error instanceof Error ? error : new Error(String(error)));
       toast({
         title: 'Error',
         description: 'Failed to rename preset',
@@ -221,7 +222,7 @@ export function Settings() {
         description: 'Preset has been deleted',
       });
     } catch (error) {
-      console.error('[Settings] Failed to delete preset:', error);
+      logger.error('Failed to delete preset', 'Settings', error instanceof Error ? error : new Error(String(error)));
       toast({
         title: 'Error',
         description: error instanceof Error ? error.message : 'Failed to delete preset',

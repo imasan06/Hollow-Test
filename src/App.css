@@ -1,4 +1,3 @@
-/* Custom app styles - design system is in index.css */
 
 html, body, #root {
   height: 100%;
@@ -6,11 +5,9 @@ html, body, #root {
   overflow-x: hidden;
   overscroll-behavior: none;
   -webkit-overflow-scrolling: touch;
-  /* Prevent zoom on double tap */
   touch-action: pan-x pan-y;
 }
 
-/* Safe area padding for mobile devices */
 .safe-area-top {
   padding-top: env(safe-area-inset-top);
 }
@@ -19,14 +16,12 @@ html, body, #root {
   padding-bottom: env(safe-area-inset-bottom);
 }
 
-/* Prevent text selection on mobile */
 .no-select {
   -webkit-user-select: none;
   user-select: none;
   -webkit-touch-callout: none;
 }
 
-/* Smooth touch feedback */
 .touch-feedback {
   -webkit-tap-highlight-color: transparent;
 }

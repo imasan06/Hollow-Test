@@ -89,8 +89,7 @@ function encodeImaAdpcm(samples: Int16Array): Uint8Array {
 function generateSinePcm(durationSeconds: number, frequency: number, sampleRate: number): Int16Array {
   const totalSamples = Math.floor(durationSeconds * sampleRate);
   const pcm = new Int16Array(totalSamples);
-  const amplitude = 6000; // keep headroom to avoid clipping during ADPCM reconstruction
-
+  const amplitude = 6000;
   for (let i = 0; i < totalSamples; i++) {
     const t = i / sampleRate;
     pcm[i] = Math.round(Math.sin(2 * Math.PI * frequency * t) * amplitude);
@@ -99,9 +98,7 @@ function generateSinePcm(durationSeconds: number, frequency: number, sampleRate:
   return pcm;
 }
 
-/**
- * Generate ADPCM chunks representing a sine wave so the decoder can be tested
- */
+
 export function generateMockAdpcmAudio(
   durationSeconds: number,
   frequency: number,
@@ -128,23 +125,23 @@ export class MockBleService {
   }
 
   async scan(): Promise<MockDevice> {
-    console.log('[BLE] Scanning for Hollow Watch...');
+    logger.debug('Scanning for Hollow Watch', 'BLE');
     await new Promise((resolve) => setTimeout(resolve, 1000));
-    console.log('[BLE] Device found: Hollow-DEMO');
+    logger.debug('Device found: Hollow-DEMO', 'BLE');
     return this.device;
   }
 
   async connect(): Promise<void> {
-    console.log('[BLE] Connecting...');
+    logger.debug('Connecting', 'BLE');
     await new Promise((resolve) => setTimeout(resolve, 500));
     this.connected = true;
-    console.log('[BLE] ✓ Connected');
+    logger.debug('Connected', 'BLE');
   }
 
   async startStreaming(): Promise<void> {
     if (!this.connected) return;
 
-    console.log('[BLE] Subscribing to audio notifications...');
+    logger.debug('Subscribing to audio notifications', 'BLE');
     this.emitText(PROTOCOL.START_VOICE);
 
     const chunks = generateMockAdpcmAudio(
@@ -158,13 +155,13 @@ export class MockBleService {
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
       total += chunk.length;
-      console.log(`[BLE] Chunk ${i + 1}/${chunks.length} (${chunk.length} bytes) - Total: ${total} bytes`);
+      logger.debug(`Chunk ${i + 1}/${chunks.length} (${chunk.length} bytes) - Total: ${total} bytes`, 'BLE');
       this.emitBytes(chunk);
       await new Promise((resolve) => setTimeout(resolve, APP_CONFIG.MOCK_CHUNK_DELAY_MS));
     }
 
     this.emitText(PROTOCOL.END);
-    console.log(`[BLE] ✓ Audio complete: ${total} bytes ADPCM`);
+    logger.debug(`Audio complete: ${total} bytes ADPCM`, 'BLE');
   }
 
   disconnect(): void {

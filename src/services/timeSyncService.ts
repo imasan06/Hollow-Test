@@ -1,103 +1,82 @@
-/**
- * Time Synchronization Service
- * 
- * Handles periodic time sync with the watch (every 60 seconds)
- * and responds to REQ_TIME requests from the watch.
- * 
- * This service is separate from AI response handling to prevent
- * time messages from appearing as AI answers.
- */
-
 import { bleManager } from '@/ble/bleManager';
+import { logger } from '@/utils/logger';
 
 class TimeSyncService {
   private intervalId: NodeJS.Timeout | null = null;
   private isActive = false;
-  private readonly SYNC_INTERVAL_MS = 60000; // 60 seconds
+  private readonly SYNC_INTERVAL_MS = 60000;
 
-  /**
-   * Start periodic time synchronization
-   * Sends time every 60 seconds while connected
-   */
+
   start(): void {
     if (this.isActive) {
-      console.warn('[TimeSync] Already active, ignoring start()');
+      logger.warn('Already active, ignoring start()', 'TimeSync');
       return;
     }
 
     if (!bleManager.isConnected()) {
-      console.warn('[TimeSync] Cannot start - not connected to device');
+      logger.warn('Cannot start - not connected to device', 'TimeSync');
       return;
     }
 
     this.isActive = true;
-    console.log('[TimeSync] Starting periodic time sync (60s interval)');
+    logger.debug('Starting periodic time sync (60s interval)', 'TimeSync');
 
-    // Send immediately on start
+
     this.sendTimeNow();
 
-    // Then send every 60 seconds
+
     this.intervalId = setInterval(() => {
       if (bleManager.isConnected()) {
         this.sendTimeNow();
       } else {
-        console.warn('[TimeSync] Device disconnected, stopping sync');
+        logger.warn('Device disconnected, stopping sync', 'TimeSync');
         this.stop();
       }
     }, this.SYNC_INTERVAL_MS);
   }
 
-  /**
-   * Stop periodic time synchronization
-   */
+
   stop(): void {
     if (!this.isActive) {
       return;
     }
 
     this.isActive = false;
-    
+
     if (this.intervalId) {
       clearInterval(this.intervalId);
       this.intervalId = null;
-      console.log('[TimeSync] Stopped periodic time sync');
+      logger.debug('Stopped periodic time sync', 'TimeSync');
     }
   }
 
-  /**
-   * Send time immediately (used for REQ_TIME responses and initial sync)
-   */
+
   async sendTimeNow(): Promise<void> {
     if (!bleManager.isConnected()) {
-      console.warn('[TimeSync] Cannot send time - not connected');
+      logger.warn('Cannot send time - not connected', 'TimeSync');
       return;
     }
 
     try {
       await bleManager.sendTime();
-      console.log('[TimeSync] Time sent successfully');
+      logger.debug('Time sent successfully', 'TimeSync');
     } catch (error) {
-      console.error('[TimeSync] Failed to send time:', error);
+      logger.error('Failed to send time', 'TimeSync', error instanceof Error ? error : new Error(String(error)));
     }
   }
 
-  /**
-   * Handle REQ_TIME request from watch
-   * Called when watch requests time via control message
-   */
+
   async handleTimeRequest(): Promise<void> {
-    console.log('[TimeSync] Watch requested time (REQ_TIME)');
+    logger.debug('Watch requested time (REQ_TIME)', 'TimeSync');
     await this.sendTimeNow();
   }
 
-  /**
-   * Check if service is active
-   */
+
   isRunning(): boolean {
     return this.isActive;
   }
 }
 
-// Singleton instance
+
 export const timeSyncService = new TimeSyncService();
 
