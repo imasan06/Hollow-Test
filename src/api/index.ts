@@ -3,8 +3,8 @@
  * 
  * Handles communication with the LLM backend service.
  * Audio is transcribed locally before sending to backend.
- * Backend expects: POST /transcribe with { user_id, transcript, persona, rules }
- * Header: X-User-Token: <user_id>
+ * Backend expects: POST /v1/chat with { user_id, transcript, persona, rules }
+ * Header: X-User-Token: <backend_shared_token> (NOT user_id - this is for authentication)
  */
 
 import { formatConversationContext } from '@/storage/conversationStore';
@@ -12,10 +12,39 @@ import { getActivePreset } from '@/storage/settingsStore';
 import { Capacitor, CapacitorHttp } from '@capacitor/core';
 import { Preferences } from '@capacitor/preferences';
 import { transcribeWithWebSpeech } from '@/audio/speechRecognition';
+import { transcribeWithGoogleSpeech, isGoogleSpeechAvailable } from '@/audio/googleSpeechTranscription';
+import { transcribeWithWhisper, isWhisperAvailable } from '@/audio/whisperTranscription';
+import { transcribeWithFasterWhisper, isFasterWhisperAvailable } from '@/audio/fasterWhisperTranscription';
 
 // Hollow backend endpoint
 const API_ENDPOINT = 'https://hollow-backend.fly.dev';
 const USER_ID_STORAGE_KEY = 'hollow_user_id';
+
+/**
+ * Get backend shared token from environment or config
+ * This token is used for authentication in X-User-Token header
+ */
+function getBackendSharedToken(): string | null {
+  // Try Vite environment variable first (import.meta.env)
+  // In Vite, environment variables are accessed via import.meta.env, not process.env
+  if (typeof import.meta !== 'undefined' && import.meta.env) {
+    const token = import.meta.env.VITE_BACKEND_SHARED_TOKEN;
+    if (token) return token;
+  }
+  
+  // Fallback: Try process.env (for compatibility with other build tools)
+  if (typeof process !== 'undefined' && process.env) {
+    const token = process.env.REACT_APP_BACKEND_SHARED_TOKEN || process.env.VITE_BACKEND_SHARED_TOKEN;
+    if (token) return token;
+  }
+  
+  // Try window config (for runtime configuration)
+  if (typeof window !== 'undefined' && (window as any).BACKEND_SHARED_TOKEN) {
+    return (window as any).BACKEND_SHARED_TOKEN;
+  }
+  
+  return null;
+}
 
 
 export interface TranscribeRequest {
@@ -64,8 +93,8 @@ async function getUserId(): Promise<string> {
 /**
  * Send audio or text to backend for LLM processing
  * Audio is transcribed locally using Web Speech API before sending to backend
- * Backend expects: POST /transcribe with { user_id, transcript, persona, rules }
- * Header: X-User-Token: <user_id>
+ * Backend expects: POST /v1/chat with { user_id, transcript, persona, rules }
+ * Header: X-User-Token: <backend_shared_token> (for authentication, NOT user_id)
  * 
  * @param request - Request with audio (WAV base64) or text
  * @returns Promise resolving to LLM response text
@@ -85,18 +114,83 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
   let transcript = '';
   let localTranscription = '';
   
-  // For audio requests: transcribe locally first
+  // For audio requests: try transcription with fallback chain
+  // Priority: Faster-Whisper (if configured) > Web Speech API > Google Cloud Speech > OpenAI Whisper
   if (request.audio) {
-    console.log('[API] Audio provided, transcribing locally with Web Speech API...');
+    console.log('[API] Audio provided, attempting transcription...');
     console.log('[API] Audio base64 length:', request.audio.length);
     
-    try {
-      localTranscription = await transcribeWithWebSpeech(request.audio);
-      transcript = localTranscription;
-      console.log('[API] ✅ Local transcription successful:', transcript);
-    } catch (error: any) {
-      console.error('[API] ❌ Local transcription failed:', error);
-      throw new Error(`Failed to transcribe audio: ${error.message}`);
+    let transcriptionSuccess = false;
+    
+    // Option 1: Try Faster-Whisper first (if configured - fastest and most accurate)
+    if (isFasterWhisperAvailable()) {
+      try {
+        localTranscription = await transcribeWithFasterWhisper(request.audio);
+        transcript = localTranscription;
+        transcriptionSuccess = true;
+        console.log('[API] ✅ Faster-Whisper transcription successful:', transcript);
+      } catch (fasterWhisperError: any) {
+        console.warn('[API] ⚠️ Faster-Whisper failed:', fasterWhisperError.message);
+        console.log('[API] Attempting fallback to Web Speech API...');
+      }
+    }
+    
+    // Option 2: Try Web Speech API (works on web, not on Android native)
+    if (!transcriptionSuccess) {
+      try {
+        localTranscription = await transcribeWithWebSpeech(request.audio);
+        transcript = localTranscription;
+        transcriptionSuccess = true;
+        console.log('[API] ✅ Local transcription (Web Speech API) successful:', transcript);
+      } catch (webSpeechError: any) {
+        console.warn('[API] ⚠️ Web Speech API failed:', webSpeechError.message);
+        console.log('[API] Attempting fallback to Google Cloud Speech API (FREE)...');
+      }
+    }
+    
+    // Option 3: Try Google Cloud Speech API (FREE - 60 min/month)
+    if (!transcriptionSuccess && isGoogleSpeechAvailable()) {
+      try {
+        localTranscription = await transcribeWithGoogleSpeech(request.audio);
+        transcript = localTranscription;
+        transcriptionSuccess = true;
+        console.log('[API] ✅ Google Cloud Speech API transcription successful (FREE):', transcript);
+      } catch (googleError: any) {
+        console.warn('[API] ⚠️ Google Cloud Speech API failed:', googleError.message);
+        console.log('[API] Attempting fallback to OpenAI Whisper API (PAID)...');
+      }
+    }
+    
+    // Option 4: Try OpenAI Whisper API (PAID) as last resort
+    if (!transcriptionSuccess && isWhisperAvailable()) {
+      try {
+        localTranscription = await transcribeWithWhisper(request.audio);
+        transcript = localTranscription;
+        transcriptionSuccess = true;
+        console.log('[API] ✅ Whisper API transcription successful (PAID):', transcript);
+      } catch (whisperError: any) {
+        console.error('[API] ❌ Whisper API transcription failed:', whisperError);
+      }
+    }
+    
+    // If all methods failed, throw error with helpful message
+    if (!transcriptionSuccess) {
+      const errorMessage = 
+        '⚠️ Transcripción de audio no disponible.\n\n' +
+        'Opciones de configuración:\n\n' +
+        '🚀 OPCIÓN RECOMENDADA (Gratis, más rápida):\n' +
+        '• Faster-Whisper: Despliega un servidor con faster-whisper\n' +
+        '• Configura: VITE_FASTER_WHISPER_ENDPOINT en .env\n' +
+        '• Guía: FASTER_WHISPER_SETUP.md\n\n' +
+        '🆓 OPCIÓN GRATIS:\n' +
+        '• Google Cloud Speech-to-Text: 60 minutos GRATIS por mes\n' +
+        '• Configura: VITE_GOOGLE_CLOUD_API_KEY en .env\n' +
+        '• Guía: FREE_TRANSCRIPTION_SETUP.md\n\n' +
+        '💰 OPCIÓN DE PAGO:\n' +
+        '• OpenAI Whisper: $0.006 por minuto\n' +
+        '• Configura: VITE_OPENAI_API_KEY en .env\n\n' +
+        '💡 Nota: En navegadores web, Web Speech API funciona sin configuración.';
+      throw new Error(errorMessage);
     }
   } 
   // For text requests: use text directly as transcript
@@ -105,6 +199,15 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
     console.log('[API] Using provided text as transcript:', transcript);
   } else {
     throw new Error('Either audio or text must be provided');
+  }
+  
+  // Get backend shared token for authentication
+  const backendToken = getBackendSharedToken();
+  if (!backendToken) {
+    throw new Error(
+      'Backend shared token not found. Please set REACT_APP_BACKEND_SHARED_TOKEN or VITE_BACKEND_SHARED_TOKEN environment variable, ' +
+      'or set window.BACKEND_SHARED_TOKEN at runtime.'
+    );
   }
   
   // Build backend request payload
@@ -119,8 +222,13 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
   
   // Log final JSON payload being sent to backend
   console.log('[API] ========== FINAL BACKEND PAYLOAD ==========');
-  console.log('[API] Endpoint: POST /transcribe');
-  console.log('[API] Header X-User-Token:', user_id);
+  console.log('[API] Endpoint: POST /v1/chat');
+  console.log('[API] Full URL:', `${API_ENDPOINT}/v1/chat`);
+  console.log('[API] Header X-User-Token (backend shared token):', backendToken.substring(0, 10) + '...' + (backendToken.length > 14 ? backendToken.substring(backendToken.length - 4) : ''));
+  console.log('[API] Header X-User-Token (FULL - for debugging):', backendToken);
+  console.log('[API] Header X-User-Token length:', backendToken.length);
+  console.log('[API] Payload user_id (for backend tracking):', user_id);
+  console.log('[API] All headers:', JSON.stringify({ 'Content-Type': 'application/json', 'X-User-Token': backendToken.substring(0, 10) + '...' }, null, 2));
   console.log('[API] Payload JSON:', JSON.stringify(backendPayload, null, 2));
   console.log('[API] Payload fields:');
   console.log('[API]   - user_id:', backendPayload.user_id);
@@ -130,7 +238,7 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
   console.log('[API] ===========================================');
   
   try {
-    const url = `${API_ENDPOINT}/transcribe`;
+    const url = `${API_ENDPOINT}/v1/chat`;
     const isNative = Capacitor.isNativePlatform();
     const requestStart = performance.now();
     
@@ -144,7 +252,7 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
           url: url,
           headers: {
             'Content-Type': 'application/json',
-            'X-User-Token': user_id,
+            'X-User-Token': backendToken, // Backend shared token for authentication
           },
           data: backendPayload,
           // Add timeout to prevent hanging requests
@@ -168,7 +276,9 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
           console.error('[API] Full error response:', JSON.stringify(errorData, null, 2));
           console.error('[API] Request URL:', url);
           console.error('[API] Request method: POST');
-          console.error('[API] Request headers:', { 'Content-Type': 'application/json', 'X-User-Token': user_id });
+          console.error('[API] Request headers (full):', JSON.stringify({ 'Content-Type': 'application/json', 'X-User-Token': backendToken.substring(0, 10) + '...' }, null, 2));
+          console.error('[API] X-User-Token value (backend shared token):', backendToken.substring(0, 10) + '...' + (backendToken.length > 14 ? backendToken.substring(backendToken.length - 4) : ''));
+          console.error('[API] X-User-Token length:', backendToken.length);
           console.error('[API] Request payload:', JSON.stringify(backendPayload, null, 2));
           console.error('[API] ===================================');
           
@@ -186,8 +296,8 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
         console.log('[API] Response data keys:', Object.keys(data));
         console.log('[API] Full response structure:', JSON.stringify(data, null, 2));
         
-        // Backend returns { answer: string } (no transcription field, since we transcribed locally)
-        const answer = data.answer ?? data.text ?? data.response ?? '';
+        // Backend returns { reply: string } or { answer: string } (no transcription field, since we transcribed locally)
+        const answer = data.reply ?? data.answer ?? data.text ?? data.response ?? '';
         
         const normalizedData: TranscribeResponse = {
           text: answer,
@@ -231,7 +341,7 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-User-Token': user_id,
+        'X-User-Token': backendToken, // Backend shared token for authentication
       },
       body: JSON.stringify(backendPayload),
       signal: controller.signal,
@@ -250,8 +360,8 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
     const data = await response.json();
     console.log('[API] Request completed successfully', `(${requestTime.toFixed(2)}ms)`);
     
-    // Backend returns { answer: string }
-    const answer = data.answer ?? data.text ?? data.response ?? '';
+    // Backend returns { reply: string } or { answer: string }
+    const answer = data.reply ?? data.answer ?? data.text ?? data.response ?? '';
     
     const normalizedData: TranscribeResponse = {
       text: answer,
