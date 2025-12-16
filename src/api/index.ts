@@ -2,202 +2,151 @@
  * Backend API wrapper for Hollow 0W
  * 
  * Handles communication with the LLM backend service.
- * Audio is sent to backend for transcription and LLM processing.
- * Includes conversation context from previous messages.
+ * Audio is transcribed locally before sending to backend.
+ * Backend expects: POST /transcribe with { user_id, transcript, persona, rules }
+ * Header: X-User-Token: <user_id>
  */
 
 import { formatConversationContext } from '@/storage/conversationStore';
 import { getActivePreset } from '@/storage/settingsStore';
 import { Capacitor, CapacitorHttp } from '@capacitor/core';
+import { Preferences } from '@capacitor/preferences';
+import { transcribeWithWebSpeech } from '@/audio/speechRecognition';
 
 // Hollow backend endpoint
 const API_ENDPOINT = 'https://hollow-backend.fly.dev';
+const USER_ID_STORAGE_KEY = 'hollow_user_id';
 
 
 export interface TranscribeRequest {
-  audio?: string; // WAV base64
+  audio?: string; // WAV base64 (will be transcribed locally)
   text?: string;  // Already transcribed text
   rules?: string;
   baserules?: string;
   persona?: string;
-  context?: string; // Conversation history context
+  context?: string; // Conversation history context (for compatibility, but backend doesn't use it)
 }
 
 export interface TranscribeResponse {
-  text: string;
-  transcription?: string;
+  text: string; // Backend returns "answer" field, mapped to text
+  transcription?: string; // Local transcription of audio
   error?: string;
 }
 
 /**
- * Send audio or text to backend for transcription and LLM processing
- * Automatically includes conversation context from previous messages
+ * Get or generate a persistent user_id
+ * Uses Capacitor Preferences to store the user_id across app sessions
+ */
+async function getUserId(): Promise<string> {
+  try {
+    const { value } = await Preferences.get({ key: USER_ID_STORAGE_KEY });
+    
+    if (value) {
+      console.log('[API] Using existing user_id:', value);
+      return value;
+    }
+    
+    // Generate new user_id (UUID-like format)
+    const newUserId = `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    await Preferences.set({ key: USER_ID_STORAGE_KEY, value: newUserId });
+    console.log('[API] Generated new user_id:', newUserId);
+    
+    return newUserId;
+  } catch (error) {
+    console.error('[API] Error getting user_id:', error);
+    // Fallback: generate a temporary user_id (not persisted)
+    const fallbackUserId = `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    console.warn('[API] Using fallback user_id (not persisted):', fallbackUserId);
+    return fallbackUserId;
+  }
+}
+
+/**
+ * Send audio or text to backend for LLM processing
+ * Audio is transcribed locally using Web Speech API before sending to backend
+ * Backend expects: POST /transcribe with { user_id, transcript, persona, rules }
+ * Header: X-User-Token: <user_id>
  * 
  * @param request - Request with audio (WAV base64) or text
  * @returns Promise resolving to LLM response text
  */
 export async function sendTranscription(request: TranscribeRequest): Promise<TranscribeResponse> {
-  // Fetch conversation context (last 12 turns)
-  const context = await formatConversationContext();
+  // Get or generate user_id
+  const user_id = await getUserId();
   
   // Load active persona preset from storage
   const activePreset = await getActivePreset();
-  const persona = request.persona || activePreset.persona;
-  const rules = request.rules || activePreset.rules || undefined;
-  const baserules = request.baserules || activePreset.baseRules || undefined;
+  const persona = request.persona || activePreset.persona || '';
+  const rules = request.rules || activePreset.rules || '';
   
   // Log which preset is being used
   console.log(`[API] Using persona preset: "${activePreset.name}" (id: ${activePreset.id})`);
   
-  // Build request with context (only include defined fields)
-  // IMPORTANT: Backend might only accept 'audio', not 'text' directly
-  // If backend doesn't accept 'text', we need to simulate what happens after audio transcription
-  const requestWithContext: any = {};
+  let transcript = '';
+  let localTranscription = '';
   
-  // For audio requests (real mode): send audio + context (exact format backend expects)
-  // IMPORTANT: Backend expects audio to be transcribed, then uses transcription as input
+  // For audio requests: transcribe locally first
   if (request.audio) {
-    requestWithContext.audio = request.audio;
+    console.log('[API] Audio provided, transcribing locally with Web Speech API...');
+    console.log('[API] Audio base64 length:', request.audio.length);
     
-    // Log audio details for debugging
-    console.log('[API] Audio details:', {
-      base64Length: request.audio.length,
-      estimatedBytes: Math.floor(request.audio.length * 0.75), // Base64 is ~33% larger
-      startsWith: request.audio.substring(0, 20),
-    });
-    
-    // If text is also provided (testing mode), include it
-    // This allows testing: audio will be transcribed as empty, but text provides the input
-    if (request.text) {
-      requestWithContext.text = request.text;
-      // Also add text to context as latest USER message (simulating post-transcription)
-      if (context) {
-        requestWithContext.context = context + '\n\nUSER: ' + request.text;
-      } else {
-        requestWithContext.context = 'USER: ' + request.text;
-      }
-    } else {
-      // Normal audio mode: just include context as-is
-      // Backend should transcribe audio and use transcription as the user input
-      if (context) {
-        requestWithContext.context = context;
-      }
-      // NOTE: Backend should extract transcription from audio and add it to context
-      // If backend doesn't do this automatically, we may need to handle it differently
+    try {
+      localTranscription = await transcribeWithWebSpeech(request.audio);
+      transcript = localTranscription;
+      console.log('[API] ✅ Local transcription successful:', transcript);
+    } catch (error: any) {
+      console.error('[API] ❌ Local transcription failed:', error);
+      throw new Error(`Failed to transcribe audio: ${error.message}`);
     }
   } 
-  // For text requests (testing): 
-  // IMPORTANT: Backend may expect text in different format
-  // Try multiple formats to ensure compatibility
+  // For text requests: use text directly as transcript
   else if (request.text) {
-    const trimmedText = request.text.trim();
-    
-    // Strategy 1: Send text field directly (most common)
-    requestWithContext.text = trimmedText;
-    
-    // Strategy 2: Also add to context as USER message (some backends expect this)
-    if (context) {
-      requestWithContext.context = context + '\n\nUSER: ' + trimmedText;
-    } else {
-      requestWithContext.context = 'USER: ' + trimmedText;
-    }
-    
-    // Strategy 3: Some backends expect 'input' or 'message' field instead of 'text'
-    // Uncomment if backend doesn't recognize 'text':
-    // requestWithContext.input = trimmedText;
-    // requestWithContext.message = trimmedText;
-    
-    console.log('[API] Text-only mode: Sending text field and context');
-    console.log('[API] Text value:', trimmedText);
-    console.log('[API] Request keys:', Object.keys(requestWithContext));
+    transcript = request.text.trim();
+    console.log('[API] Using provided text as transcript:', transcript);
+  } else {
+    throw new Error('Either audio or text must be provided');
   }
   
-  // Add persona and rules (loaded from storage or provided in request)
-  if (persona) {
-    requestWithContext.persona = persona;
-  }
-  if (rules) {
-    requestWithContext.rules = rules;
-  }
-  if (baserules) {
-    requestWithContext.baserules = baserules;
-  }
+  // Build backend request payload
+  // Backend ONLY accepts: { user_id, transcript, persona, rules }
+  // DO NOT send any extra fields (text, input, message, context) - backend will ignore transcript if extra fields are present
+  const backendPayload = {
+    user_id: user_id,
+    transcript: transcript,
+    persona: persona,
+    rules: rules,
+  };
   
-  // Add audio metadata if audio is present
-  if (request.audio) {
-    requestWithContext.sample_rate = 8000; // 8kHz from watch
-    requestWithContext.audio_format = 'wav';
-    requestWithContext.channels = 1; // Mono
-  }
-  
-  // Log complete request structure (without full audio base64)
-  const logPayload = { ...requestWithContext };
-  if (logPayload.audio) {
-    logPayload.audio = `[BASE64: ${logPayload.audio.length} chars] ${logPayload.audio.substring(0, 50)}...`;
-  }
-  
-  console.log('[API] ========== REQUEST TO BACKEND ==========');
-  console.log('[API] Endpoint:', API_ENDPOINT + '/transcribe');
-  console.log('[API] Payload keys:', Object.keys(requestWithContext));
-  console.log('[API] Payload structure:', JSON.stringify(logPayload, null, 2));
-  console.log('[API] Has audio:', !!requestWithContext.audio, requestWithContext.audio ? `(${requestWithContext.audio.length} chars base64)` : '');
-  console.log('[API] Has text:', !!requestWithContext.text, requestWithContext.text ? `("${requestWithContext.text}")` : '');
-  console.log('[API] Has context:', !!requestWithContext.context, requestWithContext.context ? `(${requestWithContext.context.length} chars)` : '');
-  console.log('[API] Context preview:', requestWithContext.context ? requestWithContext.context.substring(0, 200) + '...' : 'none');
-  console.log('[API] Has persona:', !!requestWithContext.persona, requestWithContext.persona ? `(${requestWithContext.persona.length} chars)` : '');
-  console.log('[API] Has rules:', !!requestWithContext.rules);
-  console.log('[API] Has baserules:', !!requestWithContext.baserules);
-  if (requestWithContext.audio) {
-    console.log('[API] Audio metadata:', {
-      sample_rate: requestWithContext.sample_rate,
-      audio_format: requestWithContext.audio_format,
-      channels: requestWithContext.channels,
-    });
-  }
-  console.log('[API] =========================================');
+  // Log final JSON payload being sent to backend
+  console.log('[API] ========== FINAL BACKEND PAYLOAD ==========');
+  console.log('[API] Endpoint: POST /transcribe');
+  console.log('[API] Header X-User-Token:', user_id);
+  console.log('[API] Payload JSON:', JSON.stringify(backendPayload, null, 2));
+  console.log('[API] Payload fields:');
+  console.log('[API]   - user_id:', backendPayload.user_id);
+  console.log('[API]   - transcript:', backendPayload.transcript);
+  console.log('[API]   - persona:', backendPayload.persona.substring(0, 100) + (backendPayload.persona.length > 100 ? '...' : ''));
+  console.log('[API]   - rules:', backendPayload.rules || '(empty)');
+  console.log('[API] ===========================================');
   
   try {
     const url = `${API_ENDPOINT}/transcribe`;
     const isNative = Capacitor.isNativePlatform();
-    const origin = typeof window !== 'undefined' ? window.location.origin : 'N/A';
     const requestStart = performance.now();
     
-    console.log('[API] Request URL:', url);
-    console.log('[API] Environment:', {
-      isNative: isNative,
-      origin: origin,
-      platform: Capacitor.getPlatform()
-    });
-    
     // ✅ CRITICAL: En Android/iOS SIEMPRE usar CapacitorHttp (bypasses CORS)
-    // Incluso si window.location es localhost, en nativo debemos usar CapacitorHttp
     if (isNative) {
       console.log('[API] Native platform detected - using CapacitorHttp (bypasses CORS)');
       
       try {
-        // Log exact payload being sent (for debugging backend issues)
-        console.log('[API] 🔍 EXACT PAYLOAD BEING SENT:');
-        console.log('[API] Keys:', Object.keys(requestWithContext));
-        console.log('[API] Has audio?', !!requestWithContext.audio);
-        console.log('[API] Audio length:', requestWithContext.audio?.length || 0);
-        console.log('[API] Audio starts with:', requestWithContext.audio?.substring(0, 100) || 'N/A');
-        console.log('[API] Has text?', !!requestWithContext.text);
-        console.log('[API] Has context?', !!requestWithContext.context);
-        console.log('[API] Has persona?', !!requestWithContext.persona);
-        console.log('[API] Has sample_rate?', !!requestWithContext.sample_rate);
-        console.log('[API] sample_rate value:', requestWithContext.sample_rate);
-        console.log('[API] Has audio_format?', !!requestWithContext.audio_format);
-        console.log('[API] audio_format value:', requestWithContext.audio_format);
-        console.log('[API] Has channels?', !!requestWithContext.channels);
-        console.log('[API] channels value:', requestWithContext.channels);
-        
         const nativeResponse = await CapacitorHttp.request({
           method: 'POST',
           url: url,
           headers: {
             'Content-Type': 'application/json',
+            'X-User-Token': user_id,
           },
-          data: requestWithContext,
+          data: backendPayload,
           // Add timeout to prevent hanging requests
           connectTimeout: 30000, // 30 seconds
           readTimeout: 60000,    // 60 seconds for AI processing
@@ -210,8 +159,21 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
           const errorData = typeof nativeResponse.data === 'string' 
             ? JSON.parse(nativeResponse.data) 
             : nativeResponse.data;
-          console.error('[API] Server error:', nativeResponse.status, errorData);
-          throw new Error(`Server error: ${nativeResponse.status} - ${errorData?.error || 'Unknown error'}`);
+          
+          console.error('[API] ========== SERVER ERROR ==========');
+          console.error('[API] Status:', nativeResponse.status);
+          console.error('[API] Error response type:', typeof nativeResponse.data);
+          console.error('[API] Error response raw:', nativeResponse.data);
+          console.error('[API] Error response keys:', errorData ? Object.keys(errorData) : 'no data');
+          console.error('[API] Full error response:', JSON.stringify(errorData, null, 2));
+          console.error('[API] Request URL:', url);
+          console.error('[API] Request method: POST');
+          console.error('[API] Request headers:', { 'Content-Type': 'application/json', 'X-User-Token': user_id });
+          console.error('[API] Request payload:', JSON.stringify(backendPayload, null, 2));
+          console.error('[API] ===================================');
+          
+          const errorMessage = errorData?.error || errorData?.message || (typeof errorData === 'string' ? errorData : JSON.stringify(errorData)) || 'Unknown error';
+          throw new Error(`Server error: ${nativeResponse.status} - ${errorMessage}`);
         }
 
         // res.data puede venir como objeto o string
@@ -223,39 +185,17 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
         console.log('[API] Status:', nativeResponse.status);
         console.log('[API] Response data keys:', Object.keys(data));
         console.log('[API] Full response structure:', JSON.stringify(data, null, 2));
-        console.log('[API] Response fields:', {
-          hasText: !!data.text,
-          hasAnswer: !!data.answer,
-          hasResponse: !!data.response,
-          hasTranscription: !!data.transcription,
-          hasError: !!data.error,
-          textValue: data.text ? `"${data.text.substring(0, 100)}${data.text.length > 100 ? '...' : ''}"` : 'null',
-          answerValue: data.answer ? `"${data.answer.substring(0, 100)}${data.answer.length > 100 ? '...' : ''}"` : 'null',
-          transcriptionValue: data.transcription ? `"${data.transcription}"` : 'null',
-          errorValue: data.error ? `"${data.error}"` : 'null',
-        });
         
-        // Normalize response: backend may return "answer" or "text", "transcription" or "transcript"
-        // Backend contract: { answer, transcription }
-        // Frontend accepts both for compatibility
+        // Backend returns { answer: string } (no transcription field, since we transcribed locally)
         const answer = data.answer ?? data.text ?? data.response ?? '';
-        const transcription = data.transcription ?? data.transcript ?? '';
         
         const normalizedData: TranscribeResponse = {
           text: answer,
-          transcription: transcription,
+          transcription: localTranscription, // Use local transcription if available
           error: data.error,
         };
         
-        // Log transcription if available (critical for debugging)
-        if (transcription) {
-          console.log('[API] ✅ Transcription received:', transcription);
-        } else {
-          console.warn('[API] ⚠️ No transcription in response - backend may not have transcribed audio');
-          console.warn('[API] ⚠️ Check if backend received audio correctly');
-        }
-        
-        // Log final normalized response
+        // Log final response
         if (normalizedData.text) {
           console.log('[API] ✅ Final response text:', normalizedData.text.substring(0, 200) + (normalizedData.text.length > 200 ? '...' : ''));
         } else {
@@ -265,6 +205,11 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
         if (normalizedData.error) {
           console.error('[API] ❌ Backend error:', normalizedData.error);
         }
+        
+        if (localTranscription) {
+          console.log('[API] ✅ Local transcription (used as transcript):', localTranscription);
+        }
+        
         console.log('[API] ============================================');
         
         return normalizedData;
@@ -286,8 +231,9 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'X-User-Token': user_id,
       },
-      body: JSON.stringify(requestWithContext),
+      body: JSON.stringify(backendPayload),
       signal: controller.signal,
     });
     
@@ -304,14 +250,12 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
     const data = await response.json();
     console.log('[API] Request completed successfully', `(${requestTime.toFixed(2)}ms)`);
     
-    // Normalize response: backend contract is { answer, transcription }
-    // Frontend accepts both for compatibility
+    // Backend returns { answer: string }
     const answer = data.answer ?? data.text ?? data.response ?? '';
-    const transcription = data.transcription ?? data.transcript ?? '';
     
     const normalizedData: TranscribeResponse = {
       text: answer,
-      transcription: transcription,
+      transcription: localTranscription, // Use local transcription if available
       error: data.error,
     };
     

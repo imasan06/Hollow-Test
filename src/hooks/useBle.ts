@@ -115,12 +115,12 @@ export function useBle(): UseBleReturn {
         const { samples } = decodeImaAdpcm(adpcmData);
         const decodeTime = performance.now() - decodeStart;
         console.log(`[Hook] [${sessionId}] Decoded to PCM samples:`, samples.length, `(${decodeTime.toFixed(2)}ms)`);
-
+  
         // Calculate duration
         const duration = getAudioDuration(samples.length);
         setAudioDuration(duration);
         console.log(`[Hook] [${sessionId}] Audio duration:`, duration.toFixed(2), 'seconds');
-
+  
         // Encode to WAV base64
         const encodeStart = performance.now();
         const wavBase64 = encodeWavBase64(samples);
@@ -160,10 +160,10 @@ export function useBle(): UseBleReturn {
           };
           console.log(`[Hook] [${sessionId}] Mock mode: Using hardcoded response`);
         } else {
-          toast({
-            title: 'Processing...',
-            description: 'Sending audio for transcription and AI response',
-          });
+              toast({
+                title: 'Processing...',
+                description: 'Sending audio for transcription and AI response',
+              });
           
           // Check if session is still active before sending (prevent stale requests)
           if (activeSessionId.current !== sessionId) {
@@ -199,7 +199,7 @@ export function useBle(): UseBleReturn {
   
         setLastResponse(apiResponse.text);
         setVoiceState('responding');
-        
+  
         console.log(`[Hook] [${sessionId}] AI Response received:`, apiResponse.text);
         console.log(`[Hook] [${sessionId}] Response will be displayed in UI and sent to watch`);
   
@@ -229,21 +229,21 @@ export function useBle(): UseBleReturn {
         // Only show error if this is still the active session
         if (activeSessionId.current === sessionId) {
           console.error(`[Hook] [${sessionId}] Audio processing failed:`, error);
-          const errorMessage = error instanceof Error ? error.message : 'Processing failed';
-          setLastError(errorMessage);
-          toast({
-            title: 'Processing Error',
-            description: errorMessage,
-            variant: 'destructive',
-          });
+        const errorMessage = error instanceof Error ? error.message : 'Processing failed';
+        setLastError(errorMessage);
+        toast({
+          title: 'Processing Error',
+          description: errorMessage,
+          variant: 'destructive',
+        });
         } else {
           console.warn(`[Hook] [${sessionId}] Error in stale session, ignoring`);
         }
       } finally {
         // Only reset if this is still the active session
         if (activeSessionId.current === sessionId) {
-          setIsProcessing(false);
-          setVoiceState('idle');
+        setIsProcessing(false);
+        setVoiceState('idle');
           isProcessingRequest.current = false;
         }
         chunkCount.current = 0;

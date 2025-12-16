@@ -131,9 +131,9 @@ class BleManager {
           try {
             console.log(`[BLE] Scanning for devices advertising service: ${SERVICE_UUID}`);
             device = await BleClient.requestDevice({
-              services: [SERVICE_UUID],
-              optionalServices: [],
-            });
+        services: [SERVICE_UUID],
+        optionalServices: [],
+      });
             console.log('[BLE] ✓ Device found via service UUID:', device.name ?? 'Unknown', device.deviceId);
           } catch (serviceError) {
             const errorMsg = serviceError instanceof Error ? serviceError.message : String(serviceError);
@@ -345,7 +345,7 @@ class BleManager {
     console.log('[BLE] Sending AI text response:', text.substring(0, 50) + '...');
     console.log('[BLE] Text length:', text.length, 'bytes');
 
-    const encoder = new TextEncoder();
+      const encoder = new TextEncoder();
     const fullData = encoder.encode(text);
     const maxChunkSize = 400; // Conservative limit (512 - overhead for BLE)
     
@@ -375,15 +375,15 @@ class BleManager {
           const chunkSize = Math.min(maxChunkSize, fullData.length - offset);
           const chunk = fullData.slice(offset, offset + chunkSize);
           const dataView = new DataView(chunk.buffer, chunk.byteOffset, chunk.byteLength);
-          
+      
           try {
-            await BleClient.write(
-              this.device.deviceId,
-              SERVICE_UUID,
-              TEXT_CHAR_UUID,
-              dataView
-            );
-            
+      await BleClient.write(
+        this.device.deviceId,
+        SERVICE_UUID,
+        TEXT_CHAR_UUID,
+        dataView
+      );
+
             chunkIndex++;
             offset += chunkSize;
             
