@@ -1,11 +1,10 @@
 import { useEffect } from 'react';
 import { useBle } from '@/hooks/useBle';
-import { useAudioRecorder } from '@/hooks/useAudioRecorder';
 import { Button } from '@/components/ui/button';
 import { StatusIndicator } from '@/components/ui/StatusIndicator';
 import { VoiceVisualizer } from '@/components/ui/VoiceVisualizer';
 import { ResponseCard } from '@/components/ui/ResponseCard';
-import { Bluetooth, BluetoothOff, Watch, Wifi, Settings, Mic, Square } from 'lucide-react';
+import { Bluetooth, BluetoothOff, Watch, Wifi, Settings } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { Badge } from '@/components/ui/badge';
 import { APP_CONFIG } from '@/config/app.config';
@@ -23,29 +22,9 @@ export function WatchApp() {
     scan,
     disconnect,
     deviceName,
-    processRecordedAudio,
   } = useBle();
   const isConnected = connectionState === 'connected';
   const isScanning = connectionState === 'scanning' || connectionState === 'connecting';
-
-  const {
-    isRecording,
-    duration: recordingDuration,
-    startRecording,
-    stopRecording,
-    error: recordingError,
-  } = useAudioRecorder();
-
-  const handleRecordClick = async () => {
-    if (isRecording) {
-      const result = await stopRecording();
-      if (result) {
-        await processRecordedAudio(result.wavBase64, result.duration);
-      }
-    } else {
-      await startRecording();
-    }
-  };
 
 
   return (
@@ -85,8 +64,8 @@ export function WatchApp() {
       <main className="flex flex-1 flex-col items-center justify-center gap-8 p-6">
         {/* Voice Visualizer */}
         <VoiceVisualizer
-          state={isRecording ? 'listening' : voiceState}
-          duration={isRecording ? recordingDuration : audioDuration}
+          state={voiceState}
+          duration={audioDuration}
         />
 
         {/* Transcription & Response Display */}
@@ -100,7 +79,7 @@ export function WatchApp() {
         )}
         <ResponseCard
           response={lastResponse}
-          error={recordingError || lastError}
+          error={lastError}
         />
 
         {/* Connection Controls */}
@@ -136,51 +115,27 @@ export function WatchApp() {
             </Button>
           )}
 
-          {/* Audio Recording Button for Testing */}
-          <Button
-            size="lg"
-            variant={isRecording ? 'destructive' : 'outline'}
-            onClick={handleRecordClick}
-            disabled={isProcessing}
-            className="min-w-[200px] gap-2"
-          >
-            {isRecording ? (
-              <>
-                <Square className="h-5 w-5" />
-                Stop Recording
-              </>
-            ) : (
-              <>
-                <Mic className="h-5 w-5" />
-                Test with Microphone
-              </>
-            )}
-          </Button>
-
           {/* Status Message */}
           <p className="text-center text-sm text-muted-foreground max-w-xs">
-            {isRecording && (
-              `Recording... ${recordingDuration.toFixed(1)}s`
-            )}
-            {!isRecording && connectionState === 'disconnected' && (
+            {connectionState === 'disconnected' && (
               'Tap to scan for your Hollow watch'
             )}
-            {!isRecording && connectionState === 'scanning' && (
+            {connectionState === 'scanning' && (
               'Looking for Hollow 1W...'
             )}
-            {!isRecording && connectionState === 'connecting' && (
+            {connectionState === 'connecting' && (
               'Establishing secure connection...'
             )}
-            {!isRecording && connectionState === 'connected' && voiceState === 'idle' && (
+            {connectionState === 'connected' && voiceState === 'idle' && (
               'Connected. Speak into your watch to begin.'
             )}
-            {!isRecording && voiceState === 'listening' && (
+            {voiceState === 'listening' && (
               'Receiving audio from watch...'
             )}
-            {!isRecording && voiceState === 'processing' && (
+            {voiceState === 'processing' && (
               'Processing your voice command...'
             )}
-            {!isRecording && voiceState === 'responding' && (
+            {voiceState === 'responding' && (
               'Sending response to watch...'
             )}
           </p>

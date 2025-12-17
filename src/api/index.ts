@@ -160,16 +160,48 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
       );
     }
 
-    const backendPayload = {
+    let conversationContext = request.context;
+    if (!conversationContext) {
+      conversationContext = await formatConversationContext();
+    }
+    
+    if (conversationContext) {
+      logger.debug(`Conversation context: ${conversationContext.length} chars`, 'API');
+      logger.debug(`Context preview (first 200 chars): ${conversationContext.substring(0, 200)}...`, 'API');
+    } else {
+      logger.warn('No conversation context available', 'API');
+    }
+
+    const backendPayload: any = {
       user_id: user_id,
       transcript: transcript,
       persona: persona,
       rules: rules,
     };
 
+    if (conversationContext && conversationContext.trim().length > 0) {
+      backendPayload.context = conversationContext;
+      logger.debug(`Context added to payload (${conversationContext.length} chars)`, 'API');
+      
+      const contextLines = conversationContext.split('\n\n');
+      const lastContextLine = contextLines[contextLines.length - 1];
+      logger.debug(`Last line in context being sent: ${lastContextLine.substring(0, 100)}...`, 'API');
+      
+      if (transcript && !lastContextLine.includes(transcript.substring(0, 30))) {
+        logger.warn(`Current transcript "${transcript.substring(0, 30)}..." not found in context last line!`, 'API');
+      }
+    } else {
+      logger.debug('No context added to payload (empty or null)', 'API');
+    }
+
     const url = `${API_ENDPOINT}/v1/chat`;
     const isNative = Capacitor.isNativePlatform();
     const requestStart = performance.now();
+
+    logger.debug(`Sending chat request with payload keys: ${Object.keys(backendPayload).join(', ')}`, 'API');
+    if (backendPayload.context) {
+      logger.debug(`Payload includes context: ${backendPayload.context.length} chars`, 'API');
+    }
 
     if (isNative) {
       try {

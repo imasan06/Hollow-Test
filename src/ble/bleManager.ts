@@ -16,7 +16,7 @@ export type ConnectionState = 'disconnected' | 'scanning' | 'connecting' | 'conn
 export type VoiceState = 'idle' | 'listening' | 'processing' | 'responding';
 
 export interface BleManagerCallbacks {
-  onConnectionStateChange?: (state: ConnectionState) => void;
+  onConnectionStateChange?: (state: ConnectionState) => void | Promise<void>;
   onVoiceStateChange?: (state: VoiceState) => void;
   onAudioData?: (data: Uint8Array) => void;
   onVoiceEnd?: () => void;

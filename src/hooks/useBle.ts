@@ -8,6 +8,7 @@ import { toast } from '@/hooks/use-toast';
 import { APP_CONFIG } from '@/config/app.config';
 import { appendMessage } from '@/storage/conversationStore';
 import { timeSyncService } from '@/services/timeSyncService';
+import { backgroundService } from '@/services/backgroundService';
 import { logger } from '@/utils/logger';
 
 export interface UseBleReturn {
@@ -23,7 +24,6 @@ export interface UseBleReturn {
   deviceName: string | null;
   sendTextMessage: (text: string) => Promise<void>;
   testWithAudio: (text: string) => Promise<void>;
-  processRecordedAudio: (wavBase64: string, duration: number) => Promise<void>;
 }
 
 export function useBle(): UseBleReturn {
@@ -177,7 +177,41 @@ export function useBle(): UseBleReturn {
             return;
           }
 
-          apiResponse = await sendTranscription({ audio: wavBase64 });
+          const transcriptionResult = await sendTranscription({ audio: wavBase64 });
+          
+          if (!transcriptionResult.transcription) {
+            throw new Error('No transcription received');
+          }
+
+          setLastTranscription(transcriptionResult.transcription);
+          logger.debug(`Transcription: ${transcriptionResult.transcription}`, 'Hook');
+
+          await appendMessage({
+            role: 'user',
+            text: transcriptionResult.transcription,
+            timestamp: Date.now(),
+          });
+          logger.debug('User message saved to conversation history', 'Hook');
+
+          await new Promise(resolve => setTimeout(resolve, 50));
+
+          const conversationContext = await formatConversationContext();
+          logger.debug(`Context for AI request: ${conversationContext ? `${conversationContext.length} chars` : 'empty'}`, 'Hook');
+          
+          if (conversationContext) {
+            const contextLines = conversationContext.split('\n\n');
+            const lastContextLine = contextLines[contextLines.length - 1];
+            logger.debug(`Last context line: ${lastContextLine.substring(0, 100)}...`, 'Hook');
+            
+            if (!lastContextLine.includes(transcriptionResult.transcription.substring(0, 20))) {
+              logger.warn('Current user message not found in context!', 'Hook');
+            }
+          }
+
+          apiResponse = await sendTranscription({ 
+            text: transcriptionResult.transcription,
+            context: conversationContext || undefined,
+          });
         }
 
 
@@ -188,19 +222,6 @@ export function useBle(): UseBleReturn {
 
         if (apiResponse.error) {
           throw new Error(apiResponse.error);
-        }
-
-
-        if (apiResponse.transcription) {
-          setLastTranscription(apiResponse.transcription);
-          logger.debug(`Transcription: ${apiResponse.transcription}`, 'Hook');
-
-
-          await appendMessage({
-            role: 'user',
-            text: apiResponse.transcription,
-            timestamp: Date.now(),
-          });
         }
 
         setLastResponse(apiResponse.text);
@@ -263,23 +284,35 @@ export function useBle(): UseBleReturn {
 
     try {
       await bleManager.initialize({
-        onConnectionStateChange: (state) => {
+        onConnectionStateChange: async (state) => {
           setConnectionState(state);
           setDeviceName(bleManager.getDeviceName());
 
           if (state === 'connected') {
-
             timeSyncService.start();
             logger.debug('TimeSyncService started', 'Hook');
+
+            try {
+              await backgroundService.enable();
+              logger.debug('Background mode enabled', 'Hook');
+            } catch (error) {
+              logger.warn('Failed to enable background mode', 'Hook');
+            }
 
             toast({
               title: 'Connected',
               description: `Connected to ${bleManager.getDeviceName() || 'watch'}`,
             });
           } else if (state === 'disconnected') {
-
             timeSyncService.stop();
             logger.debug('TimeSyncService stopped', 'Hook');
+
+            try {
+              await backgroundService.disable();
+              logger.debug('Background mode disabled', 'Hook');
+            } catch (error) {
+              logger.warn('Failed to disable background mode', 'Hook');
+            }
 
 
             activeSessionId.current = null;
@@ -576,102 +609,6 @@ export function useBle(): UseBleReturn {
     }
   }, []);
 
-  const processRecordedAudio = useCallback(async (wavBase64: string, duration: number) => {
-    if (isProcessingRequest.current) {
-      logger.warn('Another request is in progress, ignoring this audio', 'Hook');
-      return;
-    }
-
-    const sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    activeSessionId.current = sessionId;
-    isProcessingRequest.current = true;
-
-    setIsProcessing(true);
-    setVoiceState('processing');
-    setLastError(null);
-    setAudioDuration(duration);
-
-    try {
-      logger.debug(`Processing recorded audio, WAV base64 length: ${wavBase64.length}`, 'Hook');
-      logger.debug(`Audio duration: ${duration.toFixed(2)} seconds`, 'Hook');
-
-      const validation = validateWavFormat(wavBase64);
-      if (!validation.valid) {
-        logger.error(`WAV validation failed: ${validation.error}`, 'Hook');
-        throw new Error(`Invalid WAV format: ${validation.error}`);
-      }
-      logger.debug(`WAV validated: ${validation.sampleRate}Hz, ${validation.channels} channel(s)`, 'Hook');
-
-      toast({
-        title: 'Processing...',
-        description: 'Transcribing audio and sending to AI',
-      });
-
-      const apiResponse = await sendTranscription({ audio: wavBase64 });
-
-      if (activeSessionId.current !== sessionId) {
-        logger.warn('Response received but session changed (stale response ignored)', 'Hook');
-        return;
-      }
-
-      if (apiResponse.error) {
-        throw new Error(apiResponse.error);
-      }
-
-      const transcribedText = apiResponse.transcription || apiResponse.text || '';
-      if (transcribedText) {
-        setLastTranscription(transcribedText);
-        await appendMessage({
-          role: 'user',
-          text: transcribedText,
-          timestamp: Date.now(),
-        });
-        logger.debug(`User message saved to conversation history: ${transcribedText}`, 'Hook');
-      }
-
-      setLastResponse(apiResponse.text);
-      setVoiceState('responding');
-      logger.debug(`AI Response received: ${apiResponse.text?.substring(0, 100)}`, 'Hook');
-
-      if (apiResponse.text) {
-        await appendMessage({
-          role: 'assistant',
-          text: apiResponse.text,
-          timestamp: Date.now(),
-        });
-        logger.debug('AI response saved to conversation history', 'Hook');
-      }
-
-      if (activeSessionId.current === sessionId && connectionState === 'connected') {
-        await bleManager.sendAiText(apiResponse.text);
-        logger.debug('Response sent to watch via BLE', 'Hook');
-      }
-
-      toast({
-        title: 'Done',
-        description: 'AI response received',
-      });
-    } catch (error) {
-      if (activeSessionId.current === sessionId) {
-        logger.error('Failed to process recorded audio', 'Hook', error instanceof Error ? error : new Error(String(error)));
-        const errorMessage = error instanceof Error ? error.message : 'Failed to process audio';
-        setLastError(errorMessage);
-        toast({
-          title: 'Error',
-          description: errorMessage,
-          variant: 'destructive',
-        });
-      }
-    } finally {
-      if (activeSessionId.current === sessionId) {
-        setIsProcessing(false);
-        setVoiceState('idle');
-        isProcessingRequest.current = false;
-      }
-    }
-  }, [connectionState]);
-
-
   useEffect(() => {
     initializeBle();
 
@@ -697,6 +634,5 @@ export function useBle(): UseBleReturn {
     deviceName,
     sendTextMessage,
     testWithAudio,
-    processRecordedAudio,
   };
 }
