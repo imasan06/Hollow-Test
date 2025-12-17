@@ -4,117 +4,78 @@ import { logger } from '@/utils/logger';
 class BackgroundService {
   private isEnabled = false;
   private wakeLock: WakeLockSentinel | null = null;
-  private appStateListener: any = null;
+  private visibilityHandler: (() => void) | null = null;
 
-  async enable(): Promise<void> {
-    if (this.isEnabled) {
-      logger.debug('Background mode already enabled', 'Background');
-      return;
-    }
-
-    try {
-      if (Capacitor.isNativePlatform()) {
-        if (Capacitor.getPlatform() === 'android') {
-          await this.enableAndroid();
-        } else if (Capacitor.getPlatform() === 'ios') {
-          await this.enableIOS();
-        }
-      } else {
-        await this.enableWeb();
-      }
-
-      this.isEnabled = true;
-      logger.debug('Background mode enabled', 'Background');
-
-      if (typeof document !== 'undefined') {
-        document.addEventListener('visibilitychange', this.handleVisibilityChange.bind(this));
-        logger.debug('Visibility change listener added', 'Background');
-      }
-    } catch (error) {
-      logger.error('Failed to enable background mode', 'Background', error instanceof Error ? error : new Error(String(error)));
-      throw error;
+  constructor() {
+    if (Capacitor.isNativePlatform()) {
+      logger.debug('Running on native platform, background mode relies on native capabilities.', 'BackgroundService');
+    } else {
+      this.visibilityHandler = this.handleVisibilityChange.bind(this);
+      document.addEventListener('visibilitychange', this.visibilityHandler);
+      logger.debug('Added visibilitychange listener for web platform', 'BackgroundService');
     }
   }
 
-  private handleVisibilityChange(): void {
-    if (document.hidden) {
-      logger.debug('App moved to background', 'Background');
-      this.keepAlive();
+  private handleVisibilityChange = async () => {
+    if (document.visibilityState === 'hidden') {
+      logger.debug('App moved to background (web)', 'BackgroundService');
+      if (this.isEnabled) {
+        await this.keepAlive();
+      }
     } else {
-      logger.debug('App moved to foreground', 'Background');
+      logger.debug('App moved to foreground (web)', 'BackgroundService');
+      if (this.wakeLock) {
+        await this.wakeLock.release();
+        this.wakeLock = null;
+        logger.debug('Wake lock released on foreground (web)', 'BackgroundService');
+      }
+    }
+  };
+
+  async enable(): Promise<void> {
+    if (this.isEnabled) {
+      logger.debug('Background mode already enabled', 'BackgroundService');
+      return;
+    }
+    this.isEnabled = true;
+    logger.info('Background mode enabled. App will attempt to stay alive.', 'BackgroundService');
+
+    if (!Capacitor.isNativePlatform()) {
+      await this.keepAlive();
     }
   }
 
   async disable(): Promise<void> {
     if (!this.isEnabled) {
+      logger.debug('Background mode already disabled', 'BackgroundService');
       return;
     }
+    this.isEnabled = false;
+    logger.info('Background mode disabled.', 'BackgroundService');
 
-    try {
-      if (this.wakeLock) {
-        await this.wakeLock.release();
-        this.wakeLock = null;
-      }
-
-      if (typeof document !== 'undefined') {
-        document.removeEventListener('visibilitychange', this.handleVisibilityChange.bind(this));
-        logger.debug('Visibility change listener removed', 'Background');
-      }
-
-      this.isEnabled = false;
-      logger.debug('Background mode disabled', 'Background');
-    } catch (error) {
-      logger.error('Failed to disable background mode', 'Background', error instanceof Error ? error : new Error(String(error)));
-    }
-  }
-
-  private async enableAndroid(): Promise<void> {
-    if ('serviceWorker' in navigator) {
-      try {
-        const registration = await navigator.serviceWorker.register('/sw.js');
-        logger.debug('Service worker registered for background', 'Background');
-      } catch (error) {
-        logger.warn('Service worker registration failed', 'Background');
-      }
-    }
-  }
-
-  private async enableIOS(): Promise<void> {
-    logger.debug('iOS background mode enabled via UIBackgroundModes', 'Background');
-  }
-
-  private async enableWeb(): Promise<void> {
-    if ('wakeLock' in navigator) {
-      try {
-        this.wakeLock = await (navigator as any).wakeLock.request('screen');
-        logger.debug('Wake lock acquired', 'Background');
-
-        this.wakeLock.addEventListener('release', () => {
-          logger.debug('Wake lock released', 'Background');
-          this.wakeLock = null;
-        });
-      } catch (error) {
-        logger.warn('Wake lock not available', 'Background');
-      }
+    if (this.wakeLock) {
+      await this.wakeLock.release();
+      this.wakeLock = null;
+      logger.debug('Wake lock released', 'BackgroundService');
     }
   }
 
   private async keepAlive(): Promise<void> {
-    if (this.wakeLock && this.wakeLock.released === false) {
-      return;
-    }
-
-    if ('wakeLock' in navigator) {
+    if ('wakeLock' in navigator && !this.wakeLock) {
       try {
         this.wakeLock = await (navigator as any).wakeLock.request('screen');
-        logger.debug('Wake lock reacquired', 'Background');
+        logger.debug('Wake lock acquired', 'BackgroundService');
+        this.wakeLock.addEventListener('release', () => {
+          logger.debug('Wake lock released by system or user', 'BackgroundService');
+          this.wakeLock = null;
+        });
       } catch (error) {
-        logger.warn('Failed to reacquire wake lock', 'Background');
+        logger.warn('Failed to acquire wake lock', 'BackgroundService', error instanceof Error ? error : new Error(String(error)));
       }
     }
   }
 
-  isBackgroundModeEnabled(): boolean {
+  getIsEnabled(): boolean {
     return this.isEnabled;
   }
 }
