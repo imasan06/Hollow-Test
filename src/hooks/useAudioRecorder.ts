@@ -1,7 +1,7 @@
 
 import { useState, useRef, useCallback } from 'react';
 import { Capacitor } from '@capacitor/core';
-import { encodeWavBase64 } from '@/audio/wavEncoder';
+import { encodeWavBase64, validateWavFormat } from '@/audio/wavEncoder';
 import { logger } from '@/utils/logger';
 
 export interface UseAudioRecorderReturn {
@@ -13,18 +13,32 @@ export interface UseAudioRecorderReturn {
   error: string | null;
 }
 
-const SAMPLE_RATE = 8000;
+const SAMPLE_RATE = 16000;
 
 
 function audioBufferToPCM16(audioBuffer: AudioBuffer): Int16Array {
   const length = audioBuffer.length;
-  const pcm16 = new Int16Array(length);
-  const channelData = audioBuffer.getChannelData(0);
+  const numChannels = audioBuffer.numberOfChannels;
+  const pcm16 = new Int16Array(length * numChannels);
 
-  for (let i = 0; i < length; i++) {
+  for (let ch = 0; ch < numChannels; ch++) {
+    const channelData = audioBuffer.getChannelData(ch);
+    for (let i = 0; i < length; i++) {
+      const sample = Math.max(-1, Math.min(1, channelData[i]));
+      pcm16[i * numChannels + ch] = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+    }
+  }
 
-    const sample = Math.max(-1, Math.min(1, channelData[i]));
-    pcm16[i] = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+  if (numChannels > 1) {
+    const mono = new Int16Array(length);
+    for (let i = 0; i < length; i++) {
+      let sum = 0;
+      for (let ch = 0; ch < numChannels; ch++) {
+        sum += pcm16[i * numChannels + ch];
+      }
+      mono[i] = Math.round(sum / numChannels);
+    }
+    return mono;
   }
 
   return pcm16;
@@ -69,7 +83,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
 
       const mediaRecorder = new MediaRecorder(stream, {
         mimeType,
-        audioBitsPerSecond: 16000,
+        audioBitsPerSecond: 256000,
       });
 
       mediaRecorderRef.current = mediaRecorder;
@@ -200,26 +214,53 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
 
 
 async function convertBlobToWav(audioBlob: Blob): Promise<string> {
-  // Create AudioContext
   const arrayBuffer = await audioBlob.arrayBuffer();
   const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({
     sampleRate: SAMPLE_RATE,
   });
 
-
   const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
 
+  logger.debug(`Decoded audio: ${audioBuffer.sampleRate}Hz, ${audioBuffer.numberOfChannels} channels, ${audioBuffer.length} samples`, 'AudioRecorder');
 
   let samples: Int16Array;
-  if (audioBuffer.sampleRate !== SAMPLE_RATE) {
+  if (Math.abs(audioBuffer.sampleRate - SAMPLE_RATE) > 1) {
     logger.debug(`Resampling from ${audioBuffer.sampleRate}Hz to ${SAMPLE_RATE}Hz`, 'AudioRecorder');
     samples = resampleAudioBuffer(audioBuffer, SAMPLE_RATE);
   } else {
     samples = audioBufferToPCM16(audioBuffer);
   }
 
+  if (audioBuffer.numberOfChannels > 1) {
+    logger.debug(`Converting ${audioBuffer.numberOfChannels} channels to mono`, 'AudioRecorder');
+    const mono = new Int16Array(samples.length / audioBuffer.numberOfChannels);
+    for (let i = 0; i < mono.length; i++) {
+      let sum = 0;
+      for (let ch = 0; ch < audioBuffer.numberOfChannels; ch++) {
+        sum += samples[i * audioBuffer.numberOfChannels + ch];
+      }
+      mono[i] = Math.round(sum / audioBuffer.numberOfChannels);
+    }
+    samples = mono;
+  }
 
-  return encodeWavBase64(samples);
+  if (samples.length === 0) {
+    throw new Error('No audio samples after conversion');
+  }
+
+  logger.debug(`Final audio: ${samples.length} samples at ${SAMPLE_RATE}Hz mono (${(samples.length / SAMPLE_RATE).toFixed(2)}s)`, 'AudioRecorder');
+
+  const wavBase64 = encodeWavBase64(samples);
+
+  const validation = validateWavFormat(wavBase64);
+  if (!validation.valid) {
+    logger.error(`WAV validation failed: ${validation.error}`, 'AudioRecorder');
+    throw new Error(`Invalid WAV format: ${validation.error}`);
+  }
+
+  logger.debug(`WAV encoded and validated: ${wavBase64.length} bytes base64, ${validation.sampleRate}Hz, ${validation.channels} channel(s)`, 'AudioRecorder');
+
+  return wavBase64;
 }
 
 
@@ -228,18 +269,33 @@ function resampleAudioBuffer(audioBuffer: AudioBuffer, targetSampleRate: number)
   const ratio = sourceSampleRate / targetSampleRate;
   const sourceLength = audioBuffer.length;
   const targetLength = Math.floor(sourceLength / ratio);
-  const target = new Int16Array(targetLength);
-  const channelData = audioBuffer.getChannelData(0);
+  const numChannels = audioBuffer.numberOfChannels;
+  const target = new Int16Array(targetLength * numChannels);
 
-  for (let i = 0; i < targetLength; i++) {
-    const sourceIndex = i * ratio;
-    const sourceIndexFloor = Math.floor(sourceIndex);
-    const sourceIndexCeil = Math.min(sourceIndexFloor + 1, sourceLength - 1);
-    const t = sourceIndex - sourceIndexFloor;
+  for (let ch = 0; ch < numChannels; ch++) {
+    const channelData = audioBuffer.getChannelData(ch);
+    for (let i = 0; i < targetLength; i++) {
+      const sourceIndex = i * ratio;
+      const sourceIndexFloor = Math.floor(sourceIndex);
+      const sourceIndexCeil = Math.min(sourceIndexFloor + 1, sourceLength - 1);
+      const t = sourceIndex - sourceIndexFloor;
 
+      const sample = channelData[sourceIndexFloor] * (1 - t) + channelData[sourceIndexCeil] * t;
+      const clamped = Math.max(-1, Math.min(1, sample));
+      target[i * numChannels + ch] = clamped < 0 ? clamped * 0x8000 : clamped * 0x7FFF;
+    }
+  }
 
-    const sample = channelData[sourceIndexFloor] * (1 - t) + channelData[sourceIndexCeil] * t;
-    target[i] = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+  if (numChannels > 1) {
+    const mono = new Int16Array(targetLength);
+    for (let i = 0; i < targetLength; i++) {
+      let sum = 0;
+      for (let ch = 0; ch < numChannels; ch++) {
+        sum += target[i * numChannels + ch];
+      }
+      mono[i] = Math.round(sum / numChannels);
+    }
+    return mono;
   }
 
   return target;

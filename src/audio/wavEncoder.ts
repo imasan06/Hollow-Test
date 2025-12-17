@@ -113,3 +113,45 @@ export function releaseAudioBlobUrl(url: string): void {
 export function getAudioDuration(sampleCount: number): number {
   return sampleCount / SAMPLE_RATE;
 }
+
+export function validateWavFormat(wavBase64: string): { valid: boolean; sampleRate?: number; channels?: number; error?: string } {
+  try {
+    const wavBytes = Uint8Array.from(atob(wavBase64), c => c.charCodeAt(0));
+    
+    if (wavBytes.length < 44) {
+      return { valid: false, error: 'WAV file too small' };
+    }
+
+    const view = new DataView(wavBytes.buffer);
+    
+    const riff = String.fromCharCode(view.getUint8(0), view.getUint8(1), view.getUint8(2), view.getUint8(3));
+    if (riff !== 'RIFF') {
+      return { valid: false, error: 'Invalid RIFF header' };
+    }
+
+    const wave = String.fromCharCode(view.getUint8(8), view.getUint8(9), view.getUint8(10), view.getUint8(11));
+    if (wave !== 'WAVE') {
+      return { valid: false, error: 'Invalid WAVE header' };
+    }
+
+    const sampleRate = view.getUint32(24, true);
+    const channels = view.getUint16(22, true);
+    const bitsPerSample = view.getUint16(34, true);
+
+    if (sampleRate !== SAMPLE_RATE) {
+      return { valid: false, sampleRate, channels, error: `Sample rate must be ${SAMPLE_RATE}Hz, got ${sampleRate}Hz` };
+    }
+
+    if (channels !== NUM_CHANNELS) {
+      return { valid: false, sampleRate, channels, error: `Must be mono (1 channel), got ${channels} channels` };
+    }
+
+    if (bitsPerSample !== BITS_PER_SAMPLE) {
+      return { valid: false, sampleRate, channels, error: `Must be 16-bit, got ${bitsPerSample}-bit` };
+    }
+
+    return { valid: true, sampleRate, channels };
+  } catch (error) {
+    return { valid: false, error: `Validation error: ${error instanceof Error ? error.message : String(error)}` };
+  }
+}

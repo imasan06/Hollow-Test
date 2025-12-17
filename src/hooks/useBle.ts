@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { bleManager, ConnectionState, VoiceState } from '@/ble/bleManager';
 import { decodeImaAdpcm } from '@/audio/imaDecoder';
-import { encodeWavBase64, getAudioDuration } from '@/audio/wavEncoder';
+import { encodeWavBase64, getAudioDuration, validateWavFormat } from '@/audio/wavEncoder';
 import { textToSpeechWavSimple } from '@/audio/textToSpeech';
 import { sendTranscription } from '@/api';
 import { toast } from '@/hooks/use-toast';
@@ -126,6 +126,13 @@ export function useBle(): UseBleReturn {
         const wavBase64 = encodeWavBase64(samples);
         const encodeTime = performance.now() - encodeStart;
         logger.debug(`WAV base64 length: ${wavBase64.length} (${encodeTime.toFixed(2)}ms)`, 'Hook');
+
+        const validation = validateWavFormat(wavBase64);
+        if (!validation.valid) {
+          logger.error(`WAV validation failed: ${validation.error}`, 'Hook');
+          throw new Error(`Invalid WAV format: ${validation.error}`);
+        }
+        logger.debug(`WAV validated: ${validation.sampleRate}Hz, ${validation.channels} channel(s)`, 'Hook');
 
 
         const wavHeader = wavBase64.substring(0, 20);
@@ -587,6 +594,13 @@ export function useBle(): UseBleReturn {
     try {
       logger.debug(`Processing recorded audio, WAV base64 length: ${wavBase64.length}`, 'Hook');
       logger.debug(`Audio duration: ${duration.toFixed(2)} seconds`, 'Hook');
+
+      const validation = validateWavFormat(wavBase64);
+      if (!validation.valid) {
+        logger.error(`WAV validation failed: ${validation.error}`, 'Hook');
+        throw new Error(`Invalid WAV format: ${validation.error}`);
+      }
+      logger.debug(`WAV validated: ${validation.sampleRate}Hz, ${validation.channels} channel(s)`, 'Hook');
 
       toast({
         title: 'Processing...',
