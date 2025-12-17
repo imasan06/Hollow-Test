@@ -6,7 +6,7 @@ import { textToSpeechWavSimple } from '@/audio/textToSpeech';
 import { sendTranscription } from '@/api';
 import { toast } from '@/hooks/use-toast';
 import { APP_CONFIG } from '@/config/app.config';
-import { appendMessage } from '@/storage/conversationStore';
+import { appendMessage, formatConversationContext } from '@/storage/conversationStore';
 import { timeSyncService } from '@/services/timeSyncService';
 import { backgroundService } from '@/services/backgroundService';
 import { logger } from '@/utils/logger';
