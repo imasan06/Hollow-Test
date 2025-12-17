@@ -1,6 +1,17 @@
 import { Capacitor } from '@capacitor/core';
 import { logger } from '@/utils/logger';
 
+interface BackgroundServicePlugin {
+  startService(): Promise<{ success: boolean }>;
+  stopService(): Promise<{ success: boolean }>;
+}
+
+declare global {
+  interface Window {
+    BackgroundService?: BackgroundServicePlugin;
+  }
+}
+
 class BackgroundService {
   private isEnabled = false;
   private wakeLock: WakeLockSentinel | null = null;
@@ -8,7 +19,7 @@ class BackgroundService {
 
   constructor() {
     if (Capacitor.isNativePlatform()) {
-      logger.debug('Running on native platform, background mode relies on native capabilities.', 'BackgroundService');
+      logger.debug('Running on native platform, using native foreground service.', 'BackgroundService');
     } else {
       this.visibilityHandler = this.handleVisibilityChange.bind(this);
       document.addEventListener('visibilitychange', this.visibilityHandler);
@@ -37,11 +48,30 @@ class BackgroundService {
       logger.debug('Background mode already enabled', 'BackgroundService');
       return;
     }
-    this.isEnabled = true;
-    logger.info('Background mode enabled. App will attempt to stay alive.', 'BackgroundService');
 
-    if (!Capacitor.isNativePlatform()) {
-      await this.keepAlive();
+    try {
+      if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android') {
+        const Plugins = (Capacitor as any).Plugins;
+        if (Plugins && Plugins.BackgroundService) {
+          try {
+            await Plugins.BackgroundService.startService();
+            logger.info('Native foreground service started', 'BackgroundService');
+          } catch (serviceError) {
+            logger.warn('Failed to start foreground service, BLE plugin will handle background', 'BackgroundService');
+          }
+        } else {
+          logger.warn('BackgroundService plugin not registered, BLE plugin will handle background', 'BackgroundService');
+        }
+      } else if (!Capacitor.isNativePlatform()) {
+        await this.keepAlive();
+      }
+
+      this.isEnabled = true;
+      logger.info('Background mode enabled. App will attempt to stay alive.', 'BackgroundService');
+    } catch (error) {
+      logger.error('Failed to enable background mode', 'BackgroundService', error instanceof Error ? error : new Error(String(error)));
+      this.isEnabled = true;
+      logger.warn('Continuing without foreground service - BLE plugin may handle background', 'BackgroundService');
     }
   }
 
@@ -50,13 +80,30 @@ class BackgroundService {
       logger.debug('Background mode already disabled', 'BackgroundService');
       return;
     }
-    this.isEnabled = false;
-    logger.info('Background mode disabled.', 'BackgroundService');
 
-    if (this.wakeLock) {
-      await this.wakeLock.release();
-      this.wakeLock = null;
-      logger.debug('Wake lock released', 'BackgroundService');
+    try {
+      if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android') {
+        const Plugins = (Capacitor as any).Plugins;
+        if (Plugins && Plugins.BackgroundService) {
+          try {
+            await Plugins.BackgroundService.stopService();
+            logger.info('Native foreground service stopped', 'BackgroundService');
+          } catch (serviceError) {
+            logger.warn('Failed to stop foreground service', 'BackgroundService');
+          }
+        }
+      }
+
+      if (this.wakeLock) {
+        await this.wakeLock.release();
+        this.wakeLock = null;
+        logger.debug('Wake lock released', 'BackgroundService');
+      }
+
+      this.isEnabled = false;
+      logger.info('Background mode disabled.', 'BackgroundService');
+    } catch (error) {
+      logger.error('Failed to disable background mode', 'BackgroundService', error instanceof Error ? error : new Error(String(error)));
     }
   }
 
@@ -70,7 +117,7 @@ class BackgroundService {
           this.wakeLock = null;
         });
       } catch (error) {
-        logger.warn('Failed to acquire wake lock', 'BackgroundService', error instanceof Error ? error : new Error(String(error)));
+        logger.warn('Failed to acquire wake lock', 'BackgroundService');
       }
     }
   }
