@@ -54,10 +54,25 @@ class BackgroundService {
         const Plugins = (Capacitor as any).Plugins;
         if (Plugins && Plugins.BackgroundService) {
           try {
-            await Plugins.BackgroundService.startService();
-            logger.info('Native foreground service started', 'BackgroundService');
+            const result = await Plugins.BackgroundService.startService();
+            if (result && result.success) {
+              logger.info('Native foreground service started successfully', 'BackgroundService');
+            } else {
+              logger.warn('Foreground service start returned false', 'BackgroundService');
+            }
           } catch (serviceError) {
-            logger.warn('Failed to start foreground service, BLE plugin will handle background', 'BackgroundService');
+            logger.error('Failed to start foreground service', 'BackgroundService', serviceError instanceof Error ? serviceError : new Error(String(serviceError)));
+            // Intentar de nuevo después de un breve delay
+            setTimeout(async () => {
+              try {
+                const retryResult = await Plugins.BackgroundService.startService();
+                if (retryResult && retryResult.success) {
+                  logger.info('Foreground service started on retry', 'BackgroundService');
+                }
+              } catch (retryError) {
+                logger.error('Foreground service retry failed', 'BackgroundService', retryError instanceof Error ? retryError : new Error(String(retryError)));
+              }
+            }, 1000);
           }
         } else {
           logger.warn('BackgroundService plugin not registered, BLE plugin will handle background', 'BackgroundService');

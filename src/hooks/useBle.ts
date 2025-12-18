@@ -292,11 +292,26 @@ export function useBle(): UseBleReturn {
             timeSyncService.start();
             logger.debug('TimeSyncService started', 'Hook');
 
+            // Iniciar servicio de background inmediatamente para mantener conexión BLE
             try {
+              logger.info('Iniciando servicio de background para mantener conexión BLE...', 'Hook');
               await backgroundService.enable();
-              logger.debug('Background mode enabled', 'Hook');
+              logger.info('Servicio de background habilitado correctamente', 'Hook');
+              
+              // Verificar que el servicio está activo
+              if (backgroundService.getIsEnabled()) {
+                logger.debug('Servicio de background confirmado como activo', 'Hook');
+              } else {
+                logger.warn('Servicio de background no está activo después de habilitarlo', 'Hook');
+              }
             } catch (error) {
-              logger.warn('Failed to enable background mode', 'Hook');
+              logger.error('Error al habilitar servicio de background', 'Hook', error instanceof Error ? error : new Error(String(error)));
+              // Continuar aunque falle, pero advertir al usuario
+              toast({
+                title: 'Advertencia',
+                description: 'El servicio de background no pudo iniciarse. La conexión puede perderse en segundo plano.',
+                variant: 'destructive',
+              });
             }
 
             toast({
