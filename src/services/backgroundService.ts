@@ -13,6 +13,7 @@ const BackgroundServiceNative = registerPlugin<BackgroundServicePlugin>('Backgro
 });
 
 // Verificar que el plugin está disponible
+console.log('🔵 BackgroundServiceNative plugin registered:', BackgroundServiceNative ? 'yes' : 'no');
 logger.debug(`BackgroundServiceNative plugin registered: ${BackgroundServiceNative ? 'yes' : 'no'}`, 'BackgroundService');
 
 class BackgroundService {
@@ -47,38 +48,56 @@ class BackgroundService {
   };
 
   async enable(): Promise<void> {
+    console.log('🔵 BackgroundService.enable() llamado');
+    console.log('🔵 isEnabled actual:', this.isEnabled);
+    
     if (this.isEnabled) {
+      console.log('⚠️ Background mode already enabled');
       logger.debug('Background mode already enabled', 'BackgroundService');
       return;
     }
 
+    console.log(`🔵 Platform check: isNative=${Capacitor.isNativePlatform()}, platform=${Capacitor.getPlatform()}`);
     logger.info(`Platform check: isNative=${Capacitor.isNativePlatform()}, platform=${Capacitor.getPlatform()}`, 'BackgroundService');
 
     try {
       if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android') {
+        console.log('🔵 Android platform detected, attempting to start BackgroundService plugin...');
         logger.info('Android platform detected, attempting to start BackgroundService plugin...', 'BackgroundService');
+        
+        console.log(`🔵 BackgroundServiceNative available: ${BackgroundServiceNative ? 'yes' : 'no'}`);
+        console.log(`🔵 BackgroundServiceNative type: ${typeof BackgroundServiceNative}`);
+        console.log(`🔵 BackgroundServiceNative methods: ${BackgroundServiceNative && typeof BackgroundServiceNative === 'object' ? Object.keys(BackgroundServiceNative).join(', ') : 'N/A'}`);
+        
         logger.debug(`BackgroundServiceNative available: ${BackgroundServiceNative ? 'yes' : 'no'}`, 'BackgroundService');
         logger.debug(`BackgroundServiceNative type: ${typeof BackgroundServiceNative}`, 'BackgroundService');
         logger.debug(`BackgroundServiceNative methods: ${BackgroundServiceNative && typeof BackgroundServiceNative === 'object' ? Object.keys(BackgroundServiceNative).join(', ') : 'N/A'}`, 'BackgroundService');
         
         // Verificar que el método startService existe
         if (!BackgroundServiceNative || typeof BackgroundServiceNative.startService !== 'function') {
+          console.error('❌ BackgroundServiceNative.startService is not available! Plugin may not be registered correctly.');
           logger.error('❌ BackgroundServiceNative.startService is not available! Plugin may not be registered correctly.', 'BackgroundService');
           throw new Error('BackgroundService plugin not available. Make sure the plugin is properly registered in MainActivity.');
         }
         
         try {
+          console.log('🔵 Calling BackgroundServiceNative.startService()...');
           logger.debug('Calling BackgroundServiceNative.startService()...', 'BackgroundService');
           const result = await BackgroundServiceNative.startService();
+          console.log(`🔵 BackgroundServiceNative.startService() result:`, result);
           logger.debug(`BackgroundServiceNative.startService() result: ${JSON.stringify(result)}`, 'BackgroundService');
           
           if (result && result.success) {
+            console.log('✅ Native foreground service started successfully');
             logger.info('✅ Native foreground service started successfully', 'BackgroundService');
           } else {
+            console.warn(`⚠️ Foreground service start returned:`, result);
             logger.warn(`⚠️ Foreground service start returned: ${JSON.stringify(result)}`, 'BackgroundService');
           }
         } catch (serviceError) {
           const errorMsg = serviceError instanceof Error ? serviceError.message : String(serviceError);
+          console.error(`❌ Failed to start foreground service:`, serviceError);
+          console.error(`❌ Error message: ${errorMsg}`);
           logger.error(`❌ Failed to start foreground service: ${errorMsg}`, 'BackgroundService', serviceError instanceof Error ? serviceError : new Error(String(serviceError)));
           logger.error(`Error details: ${JSON.stringify(serviceError)}`, 'BackgroundService');
           logger.error(`Error stack: ${serviceError instanceof Error ? serviceError.stack : 'N/A'}`, 'BackgroundService');

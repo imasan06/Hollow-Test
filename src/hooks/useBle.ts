@@ -292,26 +292,22 @@ export function useBle(): UseBleReturn {
             timeSyncService.start();
             logger.debug('TimeSyncService started', 'Hook');
 
-            // Iniciar servicio de background inmediatamente para mantener conexión BLE
-            try {
-              logger.info('Iniciando servicio de background para mantener conexión BLE...', 'Hook');
-              await backgroundService.enable();
-              logger.info('Servicio de background habilitado correctamente', 'Hook');
-              
-              // Verificar que el servicio está activo
-              if (backgroundService.getIsEnabled()) {
-                logger.debug('Servicio de background confirmado como activo', 'Hook');
-              } else {
-                logger.warn('Servicio de background no está activo después de habilitarlo', 'Hook');
+            // El Foreground Service ya se inició al arrancar la app, solo verificamos que esté activo
+            if (backgroundService.getIsEnabled()) {
+              logger.debug('Foreground Service ya está activo', 'Hook');
+            } else {
+              logger.warn('⚠️ Foreground Service no está activo, intentando iniciarlo...', 'Hook');
+              try {
+                await backgroundService.enable();
+                logger.info('Foreground Service iniciado después de conectar', 'Hook');
+              } catch (error) {
+                logger.error('Error al habilitar servicio de background', 'Hook', error instanceof Error ? error : new Error(String(error)));
+                toast({
+                  title: 'Advertencia',
+                  description: 'El servicio de background no pudo iniciarse. La conexión puede perderse en segundo plano.',
+                  variant: 'destructive',
+                });
               }
-            } catch (error) {
-              logger.error('Error al habilitar servicio de background', 'Hook', error instanceof Error ? error : new Error(String(error)));
-              // Continuar aunque falle, pero advertir al usuario
-              toast({
-                title: 'Advertencia',
-                description: 'El servicio de background no pudo iniciarse. La conexión puede perderse en segundo plano.',
-                variant: 'destructive',
-              });
             }
 
             toast({
