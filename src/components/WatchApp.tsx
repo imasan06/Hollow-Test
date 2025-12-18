@@ -1,13 +1,15 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useBle } from '@/hooks/useBle';
 import { Button } from '@/components/ui/button';
 import { StatusIndicator } from '@/components/ui/StatusIndicator';
 import { VoiceVisualizer } from '@/components/ui/VoiceVisualizer';
 import { ResponseCard } from '@/components/ui/ResponseCard';
+import { ConversationHistory } from '@/components/ui/ConversationHistory';
 import { Bluetooth, BluetoothOff, Watch, Wifi, Settings } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { Badge } from '@/components/ui/badge';
 import { APP_CONFIG } from '@/config/app.config';
+import { getConversationHistory, ConversationMessage } from '@/storage/conversationStore';
 
 export function WatchApp() {
   const navigate = useNavigate();
@@ -24,12 +26,49 @@ export function WatchApp() {
     deviceName,
   } = useBle();
   
+  const [conversationHistory, setConversationHistory] = useState<ConversationMessage[]>([]);
+  
   const isConnected = connectionState === 'connected';
   const isScanning = connectionState === 'scanning' || connectionState === 'connecting';
 
+  // Load conversation history (excluding current session messages)
+  useEffect(() => {
+    const loadHistory = async () => {
+      try {
+        const history = await getConversationHistory();
+        // Filter out current session messages to avoid duplicates
+        const filtered = history.filter((msg) => {
+          // Exclude if it matches current transcription or response
+          if (lastTranscription && msg.role === 'user' && msg.text === lastTranscription) {
+            return false;
+          }
+          if (lastResponse && msg.role === 'assistant' && msg.text === lastResponse) {
+            return false;
+          }
+          return true;
+        });
+        // Sort by timestamp (oldest first for display)
+        const sorted = filtered.sort((a, b) => a.timestamp - b.timestamp);
+        setConversationHistory(sorted);
+      } catch (error) {
+        console.error('Failed to load conversation history:', error);
+      }
+    };
+
+    // Load on mount
+    loadHistory();
+    
+    // Reload when new messages are added (check every 2 seconds)
+    const interval = setInterval(() => {
+      loadHistory();
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [lastResponse, lastTranscription]);
+
 
   return (
-    <div className="flex min-h-screen flex-col bg-background safe-area-top">
+    <div className="flex h-screen flex-col bg-background safe-area-top overflow-hidden">
       {/* Header */}
       <header className="sticky top-0 z-10 border-b border-border bg-background/80 backdrop-blur-sm safe-area-top">
         <div className="container flex h-16 items-center justify-between px-4">
@@ -62,29 +101,31 @@ export function WatchApp() {
       </header>
 
       {/* Main Content */}
-      <main className="flex flex-1 flex-col items-center justify-center gap-8 p-6">
-        {/* Voice Visualizer */}
-        <VoiceVisualizer
-          state={voiceState}
-          duration={audioDuration}
-        />
+      <main className="flex-1 flex flex-col items-center gap-8 p-6 overflow-y-auto min-h-0 w-full">
+        {/* Current Session - Centered */}
+        <div className="flex flex-col items-center gap-8 w-full">
+          {/* Voice Visualizer */}
+          <VoiceVisualizer
+            state={voiceState}
+            duration={audioDuration}
+          />
 
-        {/* Transcription & Response Display */}
-        {lastTranscription && (
-          <div className="w-full max-w-md px-4">
-            <p className="text-xs text-muted-foreground mb-1">You said:</p>
-            <p className="text-sm text-foreground bg-muted/50 rounded-lg p-3 italic">
-              "{lastTranscription}"
-            </p>
-          </div>
-        )}
-        <ResponseCard
-          response={lastResponse}
-          error={lastError}
-        />
+          {/* Transcription & Response Display */}
+          {lastTranscription && (
+            <div className="w-full max-w-md px-4">
+              <p className="text-xs text-muted-foreground mb-1">You said:</p>
+              <p className="text-sm text-foreground bg-muted/50 rounded-lg p-3 italic">
+                "{lastTranscription}"
+              </p>
+            </div>
+          )}
+          <ResponseCard
+            response={lastResponse}
+            error={lastError}
+          />
 
-        {/* Connection Controls */}
-        <div className="flex flex-col items-center gap-4">
+          {/* Connection Controls */}
+          <div className="flex flex-col items-center gap-4">
           {!isConnected ? (
             <Button
               size="lg"
@@ -141,7 +182,21 @@ export function WatchApp() {
             )}
           </p>
 
+          </div>
         </div>
+
+        {/* Conversation History - Below current session */}
+        {conversationHistory.length > 0 && (
+          <div className="w-full max-w-md px-4 pt-8 border-t border-border">
+            <div className="mb-4">
+              <h2 className="text-sm font-semibold text-foreground">Conversation History</h2>
+              <p className="text-xs text-muted-foreground mt-1">
+                Scroll to see previous conversations
+              </p>
+            </div>
+            <ConversationHistory messages={conversationHistory} />
+          </div>
+        )}
       </main>
 
       {/* Footer */}
