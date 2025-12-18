@@ -1,4 +1,5 @@
 import { Capacitor } from '@capacitor/core';
+import { registerPlugin } from '@capacitor/core';
 import { logger } from '@/utils/logger';
 
 interface BackgroundServicePlugin {
@@ -6,11 +7,13 @@ interface BackgroundServicePlugin {
   stopService(): Promise<{ success: boolean }>;
 }
 
-declare global {
-  interface Window {
-    BackgroundService?: BackgroundServicePlugin;
-  }
-}
+// Registrar el plugin usando la API de Capacitor 7
+const BackgroundServiceNative = registerPlugin<BackgroundServicePlugin>('BackgroundService', {
+  web: () => import('./backgroundService.web').then(m => new m.BackgroundServiceWeb()),
+});
+
+// Verificar que el plugin está disponible
+logger.debug(`BackgroundServiceNative plugin registered: ${BackgroundServiceNative ? 'yes' : 'no'}`, 'BackgroundService');
 
 class BackgroundService {
   private isEnabled = false;
@@ -49,44 +52,67 @@ class BackgroundService {
       return;
     }
 
+    logger.info(`Platform check: isNative=${Capacitor.isNativePlatform()}, platform=${Capacitor.getPlatform()}`, 'BackgroundService');
+
     try {
       if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android') {
-        const Plugins = (Capacitor as any).Plugins;
-        if (Plugins && Plugins.BackgroundService) {
-          try {
-            const result = await Plugins.BackgroundService.startService();
-            if (result && result.success) {
-              logger.info('Native foreground service started successfully', 'BackgroundService');
-            } else {
-              logger.warn('Foreground service start returned false', 'BackgroundService');
-            }
-          } catch (serviceError) {
-            logger.error('Failed to start foreground service', 'BackgroundService', serviceError instanceof Error ? serviceError : new Error(String(serviceError)));
-            // Intentar de nuevo después de un breve delay
-            setTimeout(async () => {
-              try {
-                const retryResult = await Plugins.BackgroundService.startService();
-                if (retryResult && retryResult.success) {
-                  logger.info('Foreground service started on retry', 'BackgroundService');
-                }
-              } catch (retryError) {
-                logger.error('Foreground service retry failed', 'BackgroundService', retryError instanceof Error ? retryError : new Error(String(retryError)));
-              }
-            }, 1000);
+        logger.info('Android platform detected, attempting to start BackgroundService plugin...', 'BackgroundService');
+        logger.debug(`BackgroundServiceNative available: ${BackgroundServiceNative ? 'yes' : 'no'}`, 'BackgroundService');
+        logger.debug(`BackgroundServiceNative type: ${typeof BackgroundServiceNative}`, 'BackgroundService');
+        logger.debug(`BackgroundServiceNative methods: ${BackgroundServiceNative && typeof BackgroundServiceNative === 'object' ? Object.keys(BackgroundServiceNative).join(', ') : 'N/A'}`, 'BackgroundService');
+        
+        // Verificar que el método startService existe
+        if (!BackgroundServiceNative || typeof BackgroundServiceNative.startService !== 'function') {
+          logger.error('❌ BackgroundServiceNative.startService is not available! Plugin may not be registered correctly.', 'BackgroundService');
+          throw new Error('BackgroundService plugin not available. Make sure the plugin is properly registered in MainActivity.');
+        }
+        
+        try {
+          logger.debug('Calling BackgroundServiceNative.startService()...', 'BackgroundService');
+          const result = await BackgroundServiceNative.startService();
+          logger.debug(`BackgroundServiceNative.startService() result: ${JSON.stringify(result)}`, 'BackgroundService');
+          
+          if (result && result.success) {
+            logger.info('✅ Native foreground service started successfully', 'BackgroundService');
+          } else {
+            logger.warn(`⚠️ Foreground service start returned: ${JSON.stringify(result)}`, 'BackgroundService');
           }
-        } else {
-          logger.warn('BackgroundService plugin not registered, BLE plugin will handle background', 'BackgroundService');
+        } catch (serviceError) {
+          const errorMsg = serviceError instanceof Error ? serviceError.message : String(serviceError);
+          logger.error(`❌ Failed to start foreground service: ${errorMsg}`, 'BackgroundService', serviceError instanceof Error ? serviceError : new Error(String(serviceError)));
+          logger.error(`Error details: ${JSON.stringify(serviceError)}`, 'BackgroundService');
+          logger.error(`Error stack: ${serviceError instanceof Error ? serviceError.stack : 'N/A'}`, 'BackgroundService');
+          
+          // Intentar de nuevo después de un breve delay
+          setTimeout(async () => {
+            try {
+              logger.info('Retrying to start BackgroundService after 1 second...', 'BackgroundService');
+              const retryResult = await BackgroundServiceNative.startService();
+              if (retryResult && retryResult.success) {
+                logger.info('✅ Foreground service started on retry', 'BackgroundService');
+              } else {
+                logger.warn(`⚠️ Foreground service retry returned: ${JSON.stringify(retryResult)}`, 'BackgroundService');
+              }
+            } catch (retryError) {
+              const retryErrorMsg = retryError instanceof Error ? retryError.message : String(retryError);
+              logger.error(`❌ Foreground service retry failed: ${retryErrorMsg}`, 'BackgroundService', retryError instanceof Error ? retryError : new Error(String(retryError)));
+            }
+          }, 1000);
         }
       } else if (!Capacitor.isNativePlatform()) {
+        logger.info('Web platform detected, using wake lock', 'BackgroundService');
         await this.keepAlive();
+      } else {
+        logger.warn(`Platform ${Capacitor.getPlatform()} not supported for foreground service`, 'BackgroundService');
       }
 
       this.isEnabled = true;
       logger.info('Background mode enabled. App will attempt to stay alive.', 'BackgroundService');
     } catch (error) {
-      logger.error('Failed to enable background mode', 'BackgroundService', error instanceof Error ? error : new Error(String(error)));
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      logger.error(`❌ Failed to enable background mode: ${errorMsg}`, 'BackgroundService', error instanceof Error ? error : new Error(String(error)));
       this.isEnabled = true;
-      logger.warn('Continuing without foreground service - BLE plugin may handle background', 'BackgroundService');
+      logger.warn('⚠️ Continuing without foreground service - BLE plugin may handle background', 'BackgroundService');
     }
   }
 
@@ -98,14 +124,11 @@ class BackgroundService {
 
     try {
       if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android') {
-        const Plugins = (Capacitor as any).Plugins;
-        if (Plugins && Plugins.BackgroundService) {
-          try {
-            await Plugins.BackgroundService.stopService();
-            logger.info('Native foreground service stopped', 'BackgroundService');
-          } catch (serviceError) {
-            logger.warn('Failed to stop foreground service', 'BackgroundService');
-          }
+        try {
+          await BackgroundServiceNative.stopService();
+          logger.info('Native foreground service stopped', 'BackgroundService');
+        } catch (serviceError) {
+          logger.warn('Failed to stop foreground service', 'BackgroundService');
         }
       }
 
