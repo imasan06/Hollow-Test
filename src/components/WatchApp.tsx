@@ -1,11 +1,10 @@
 import { useEffect } from 'react';
 import { useBle } from '@/hooks/useBle';
-import { useAudioRecorder } from '@/hooks/useAudioRecorder';
 import { Button } from '@/components/ui/button';
 import { StatusIndicator } from '@/components/ui/StatusIndicator';
 import { VoiceVisualizer } from '@/components/ui/VoiceVisualizer';
 import { ResponseCard } from '@/components/ui/ResponseCard';
-import { Bluetooth, BluetoothOff, Watch, Wifi, Settings, Mic, Square, Play } from 'lucide-react';
+import { Bluetooth, BluetoothOff, Watch, Wifi, Settings } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { Badge } from '@/components/ui/badge';
 import { APP_CONFIG } from '@/config/app.config';
@@ -25,28 +24,8 @@ export function WatchApp() {
     deviceName,
   } = useBle();
   
-  // Audio recorder for testing
-  const {
-    isRecording: isMicRecording,
-    duration: micDuration,
-    isProcessing: isMicProcessing,
-    lastTranscription: micTranscription,
-    lastResponse: micResponse,
-    error: micError,
-    startRecording: startMicRecording,
-    stopRecording: stopMicRecording,
-    processRecordedAudio,
-  } = useAudioRecorder();
-  
   const isConnected = connectionState === 'connected';
   const isScanning = connectionState === 'scanning' || connectionState === 'connecting';
-  
-  // Use BLE data when connected, otherwise use mic data for testing
-  const displayTranscription = isConnected ? lastTranscription : micTranscription;
-  const displayResponse = isConnected ? lastResponse : micResponse;
-  const displayError = isConnected ? lastError : micError;
-  const displayDuration = isConnected ? audioDuration : micDuration;
-  const displayVoiceState = isConnected ? voiceState : (isMicRecording ? 'listening' : isMicProcessing ? 'processing' : 'idle');
 
 
   return (
@@ -86,90 +65,45 @@ export function WatchApp() {
       <main className="flex flex-1 flex-col items-center justify-center gap-8 p-6">
         {/* Voice Visualizer */}
         <VoiceVisualizer
-          state={displayVoiceState}
-          duration={displayDuration}
+          state={voiceState}
+          duration={audioDuration}
         />
 
         {/* Transcription & Response Display */}
-        {displayTranscription && (
+        {lastTranscription && (
           <div className="w-full max-w-md px-4">
             <p className="text-xs text-muted-foreground mb-1">You said:</p>
             <p className="text-sm text-foreground bg-muted/50 rounded-lg p-3 italic">
-              "{displayTranscription}"
+              "{lastTranscription}"
             </p>
           </div>
         )}
         <ResponseCard
-          response={displayResponse}
-          error={displayError}
+          response={lastResponse}
+          error={lastError}
         />
 
         {/* Connection Controls */}
         <div className="flex flex-col items-center gap-4">
           {!isConnected ? (
-            <>
-              <Button
-                size="lg"
-                onClick={scan}
-                disabled={isScanning}
-                className="min-w-[200px] gap-2"
-              >
-                {isScanning ? (
-                  <>
-                    <Wifi className="h-5 w-5 animate-pulse" />
-                    Scanning...
-                  </>
-                ) : (
-                  <>
-                    <Bluetooth className="h-5 w-5" />
-                    Connect Watch
-                  </>
-                )}
-              </Button>
-              
-              {/* Audio Testing Section */}
-              <div className="w-full max-w-md border-t border-border pt-6 mt-4">
-                <p className="text-xs text-muted-foreground text-center mb-4">
-                  Testing Mode - Microphone Recording
-                </p>
-                <div className="flex flex-col gap-3">
-                  {!isMicRecording ? (
-                    <Button
-                      size="lg"
-                      onClick={startMicRecording}
-                      disabled={isMicProcessing}
-                      className="w-full gap-2"
-                      variant="outline"
-                    >
-                      <Mic className="h-5 w-5" />
-                      Start Recording
-                    </Button>
-                  ) : (
-                    <Button
-                      size="lg"
-                      onClick={stopMicRecording}
-                      className="w-full gap-2"
-                      variant="destructive"
-                    >
-                      <Square className="h-5 w-5" />
-                      Stop Recording ({micDuration.toFixed(1)}s)
-                    </Button>
-                  )}
-                  
-                  {!isMicRecording && micDuration > 0 && (
-                    <Button
-                      size="lg"
-                      onClick={processRecordedAudio}
-                      disabled={isMicProcessing}
-                      className="w-full gap-2"
-                    >
-                      <Play className="h-5 w-5" />
-                      {isMicProcessing ? 'Processing...' : 'Process Audio'}
-                    </Button>
-                  )}
-                </div>
-              </div>
-            </>
+            <Button
+              size="lg"
+              onClick={scan}
+              disabled={isScanning}
+              className="min-w-[200px] gap-2"
+            >
+              {isScanning ? (
+                <>
+                  <Wifi className="h-5 w-5 animate-pulse" />
+                  Scanning...
+                </>
+              ) : (
+                <>
+                  <Bluetooth className="h-5 w-5" />
+                  Connect Watch
+                </>
+              )}
+            </Button>
           ) : (
             <Button
               size="lg"
@@ -184,11 +118,8 @@ export function WatchApp() {
 
           {/* Status Message */}
           <p className="text-center text-sm text-muted-foreground max-w-xs">
-            {connectionState === 'disconnected' && !isMicRecording && (
-              'Tap to scan for your Hollow watch or use microphone testing'
-            )}
-            {connectionState === 'disconnected' && isMicRecording && (
-              `Recording... ${micDuration.toFixed(1)}s`
+            {connectionState === 'disconnected' && (
+              'Tap to scan for your Hollow watch'
             )}
             {connectionState === 'scanning' && (
               'Looking for Hollow 1W...'
