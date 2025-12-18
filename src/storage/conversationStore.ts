@@ -86,6 +86,29 @@ export async function clearConversationHistory(): Promise<void> {
   }
 }
 
+export async function deleteMessage(timestamp: number): Promise<boolean> {
+  try {
+    const history = await getConversationHistory();
+    const filtered = history.filter((msg) => msg.timestamp !== timestamp);
+    
+    if (filtered.length === history.length) {
+      logger.warn('Message not found for deletion', 'Storage');
+      return false;
+    }
+    
+    await Preferences.set({
+      key: CONVERSATION_STORAGE_KEY,
+      value: JSON.stringify(filtered),
+    });
+    
+    logger.debug(`Deleted message with timestamp ${timestamp}. Remaining messages: ${filtered.length}`, 'Storage');
+    return true;
+  } catch (error) {
+    logger.error('Error deleting message', 'Storage', error instanceof Error ? error : new Error(String(error)));
+    return false;
+  }
+}
+
 
 export async function formatConversationContext(): Promise<string> {
   const allMessages = await getLastTurns(MAX_CONVERSATION_TURNS);

@@ -462,6 +462,13 @@ class BleManager {
     return this.device !== null;
   }
 
+  getDeviceId(): string | null {
+    if (this.device) {
+      return this.device.deviceId;
+    }
+    return null;
+  }
+
   getDeviceName(): string | null {
     return this.device?.name || null;
   }

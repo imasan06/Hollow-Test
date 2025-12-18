@@ -1,5 +1,6 @@
 import { APP_CONFIG } from '@/config/app.config';
 import { PROTOCOL } from './constants';
+import { logger } from '@/utils/logger';
 
 interface MockDevice {
   deviceId: string;

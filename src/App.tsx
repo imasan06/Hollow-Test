@@ -16,39 +16,30 @@ const queryClient = new QueryClient();
 
 const AppComponent = () => {
   useEffect(() => {
-    console.log('🔵 App.tsx useEffect ejecutado');
-    console.log('🔵 Capacitor.isNativePlatform():', Capacitor.isNativePlatform());
-    console.log('🔵 Capacitor.getPlatform():', Capacitor.getPlatform());
-    
-    // Iniciar el Foreground Service al arrancar la app (solo en Android)
+    // Start Foreground Service on app startup (Android only)
     if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android') {
-      console.log('🚀 App iniciada en Android, iniciando Foreground Service...');
-      logger.info('🚀 App iniciada, iniciando Foreground Service...', 'App');
+      logger.info('App started, initializing Foreground Service...', 'App');
       
       backgroundService.enable()
         .then(() => {
-          console.log('✅ Foreground Service iniciado exitosamente desde App.tsx');
+          logger.info('Foreground Service started successfully', 'App');
         })
         .catch((error) => {
-          console.error('❌ Error al iniciar Foreground Service desde App.tsx:', error);
-          logger.error('Error al iniciar Foreground Service al arrancar la app', 'App', error instanceof Error ? error : new Error(String(error)));
+          logger.error('Error starting Foreground Service on app startup', 'App', error instanceof Error ? error : new Error(String(error)));
         });
     } else {
-      console.log('ℹ️ App iniciada en plataforma no-Android, no se inicia Foreground Service');
-      logger.debug('App iniciada en plataforma no-Android, no se inicia Foreground Service', 'App');
+      logger.debug('App started on non-Android platform, Foreground Service not started', 'App');
     }
 
-    // Listener para cuando la app va a segundo plano
+    // Listener for app background/foreground state changes
     if (Capacitor.isNativePlatform()) {
       const handleAppStateChange = async (state: { isActive: boolean }) => {
         if (state.isActive) {
           logger.info('App moved to foreground', 'App');
-          console.log('🔵 App moved to foreground');
         } else {
           logger.info('App moved to background - maintaining BLE connection', 'App');
-          console.log('🔵 App moved to background - maintaining BLE connection');
           
-          // Asegurar que el servicio en segundo plano esté activo
+          // Ensure background service is active
           if (Capacitor.getPlatform() === 'android') {
             try {
               if (!backgroundService.getIsEnabled()) {

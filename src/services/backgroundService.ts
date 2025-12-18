@@ -3,8 +3,11 @@ import { registerPlugin } from '@capacitor/core';
 import { logger } from '@/utils/logger';
 
 interface BackgroundServicePlugin {
-  startService(): Promise<{ success: boolean }>;
+  startService(options?: { deviceAddress?: string }): Promise<{ success: boolean }>;
   stopService(): Promise<{ success: boolean }>;
+  connectBleDevice(options: { deviceAddress: string }): Promise<{ success: boolean }>;
+  disconnectBleDevice(): Promise<{ success: boolean }>;
+  isBleConnected(): Promise<{ connected: boolean }>;
 }
 
 // Registrar el plugin usando la API de Capacitor 7
@@ -12,14 +15,14 @@ const BackgroundServiceNative = registerPlugin<BackgroundServicePlugin>('Backgro
   web: () => import('./backgroundService.web').then(m => new m.BackgroundServiceWeb()),
 });
 
-// Verificar que el plugin está disponible
-console.log('🔵 BackgroundServiceNative plugin registered:', BackgroundServiceNative ? 'yes' : 'no');
+// Verify plugin is available
 logger.debug(`BackgroundServiceNative plugin registered: ${BackgroundServiceNative ? 'yes' : 'no'}`, 'BackgroundService');
 
 class BackgroundService {
   private isEnabled = false;
   private wakeLock: WakeLockSentinel | null = null;
   private visibilityHandler: (() => void) | null = null;
+  private connectedDeviceAddress: string | null = null;
 
   constructor() {
     if (Capacitor.isNativePlatform()) {
@@ -48,73 +51,58 @@ class BackgroundService {
   };
 
   async enable(): Promise<void> {
-    console.log('🔵 BackgroundService.enable() llamado');
-    console.log('🔵 isEnabled actual:', this.isEnabled);
-    
     if (this.isEnabled) {
-      console.log('⚠️ Background mode already enabled');
       logger.debug('Background mode already enabled', 'BackgroundService');
       return;
     }
 
-    console.log(`🔵 Platform check: isNative=${Capacitor.isNativePlatform()}, platform=${Capacitor.getPlatform()}`);
     logger.info(`Platform check: isNative=${Capacitor.isNativePlatform()}, platform=${Capacitor.getPlatform()}`, 'BackgroundService');
 
     try {
       if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android') {
-        console.log('🔵 Android platform detected, attempting to start BackgroundService plugin...');
         logger.info('Android platform detected, attempting to start BackgroundService plugin...', 'BackgroundService');
         
-        console.log(`🔵 BackgroundServiceNative available: ${BackgroundServiceNative ? 'yes' : 'no'}`);
-        console.log(`🔵 BackgroundServiceNative type: ${typeof BackgroundServiceNative}`);
-        console.log(`🔵 BackgroundServiceNative methods: ${BackgroundServiceNative && typeof BackgroundServiceNative === 'object' ? Object.keys(BackgroundServiceNative).join(', ') : 'N/A'}`);
-        
         logger.debug(`BackgroundServiceNative available: ${BackgroundServiceNative ? 'yes' : 'no'}`, 'BackgroundService');
-        logger.debug(`BackgroundServiceNative type: ${typeof BackgroundServiceNative}`, 'BackgroundService');
-        logger.debug(`BackgroundServiceNative methods: ${BackgroundServiceNative && typeof BackgroundServiceNative === 'object' ? Object.keys(BackgroundServiceNative).join(', ') : 'N/A'}`, 'BackgroundService');
         
-        // Verificar que el método startService existe
+        // Verify that startService method exists
         if (!BackgroundServiceNative || typeof BackgroundServiceNative.startService !== 'function') {
-          console.error('❌ BackgroundServiceNative.startService is not available! Plugin may not be registered correctly.');
-          logger.error('❌ BackgroundServiceNative.startService is not available! Plugin may not be registered correctly.', 'BackgroundService');
+          logger.error('BackgroundServiceNative.startService is not available! Plugin may not be registered correctly.', 'BackgroundService');
           throw new Error('BackgroundService plugin not available. Make sure the plugin is properly registered in MainActivity.');
         }
         
         try {
-          console.log('🔵 Calling BackgroundServiceNative.startService()...');
           logger.debug('Calling BackgroundServiceNative.startService()...', 'BackgroundService');
-          const result = await BackgroundServiceNative.startService();
-          console.log(`🔵 BackgroundServiceNative.startService() result:`, result);
+          
+          // Pass device BLE address if available
+          const options = this.connectedDeviceAddress 
+            ? { deviceAddress: this.connectedDeviceAddress }
+            : undefined;
+          
+          const result = await BackgroundServiceNative.startService(options);
           logger.debug(`BackgroundServiceNative.startService() result: ${JSON.stringify(result)}`, 'BackgroundService');
           
           if (result && result.success) {
-            console.log('✅ Native foreground service started successfully');
-            logger.info('✅ Native foreground service started successfully', 'BackgroundService');
+            logger.info('Native foreground service started successfully', 'BackgroundService');
           } else {
-            console.warn(`⚠️ Foreground service start returned:`, result);
-            logger.warn(`⚠️ Foreground service start returned: ${JSON.stringify(result)}`, 'BackgroundService');
+            logger.warn(`Foreground service start returned: ${JSON.stringify(result)}`, 'BackgroundService');
           }
         } catch (serviceError) {
           const errorMsg = serviceError instanceof Error ? serviceError.message : String(serviceError);
-          console.error(`❌ Failed to start foreground service:`, serviceError);
-          console.error(`❌ Error message: ${errorMsg}`);
-          logger.error(`❌ Failed to start foreground service: ${errorMsg}`, 'BackgroundService', serviceError instanceof Error ? serviceError : new Error(String(serviceError)));
-          logger.error(`Error details: ${JSON.stringify(serviceError)}`, 'BackgroundService');
-          logger.error(`Error stack: ${serviceError instanceof Error ? serviceError.stack : 'N/A'}`, 'BackgroundService');
+          logger.error(`Failed to start foreground service: ${errorMsg}`, 'BackgroundService', serviceError instanceof Error ? serviceError : new Error(String(serviceError)));
           
-          // Intentar de nuevo después de un breve delay
+          // Retry after a brief delay
           setTimeout(async () => {
             try {
               logger.info('Retrying to start BackgroundService after 1 second...', 'BackgroundService');
               const retryResult = await BackgroundServiceNative.startService();
               if (retryResult && retryResult.success) {
-                logger.info('✅ Foreground service started on retry', 'BackgroundService');
+                logger.info('Foreground service started on retry', 'BackgroundService');
               } else {
-                logger.warn(`⚠️ Foreground service retry returned: ${JSON.stringify(retryResult)}`, 'BackgroundService');
+                logger.warn(`Foreground service retry returned: ${JSON.stringify(retryResult)}`, 'BackgroundService');
               }
             } catch (retryError) {
               const retryErrorMsg = retryError instanceof Error ? retryError.message : String(retryError);
-              logger.error(`❌ Foreground service retry failed: ${retryErrorMsg}`, 'BackgroundService', retryError instanceof Error ? retryError : new Error(String(retryError)));
+              logger.error(`Foreground service retry failed: ${retryErrorMsg}`, 'BackgroundService', retryError instanceof Error ? retryError : new Error(String(retryError)));
             }
           }, 1000);
         }
@@ -177,6 +165,56 @@ class BackgroundService {
         logger.warn('Failed to acquire wake lock', 'BackgroundService');
       }
     }
+  }
+
+  async connectBleDevice(deviceAddress: string): Promise<void> {
+    this.connectedDeviceAddress = deviceAddress;
+    logger.info(`Connecting BLE device to background service: ${deviceAddress}`, 'BackgroundService');
+    
+    if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android') {
+      try {
+        if (BackgroundServiceNative && typeof BackgroundServiceNative.connectBleDevice === 'function') {
+          await BackgroundServiceNative.connectBleDevice({ deviceAddress });
+          logger.info('BLE device connected to background service', 'BackgroundService');
+        } else {
+          logger.warn('connectBleDevice method not available, using startService with device address', 'BackgroundService');
+          // Fallback: usar startService con la dirección del dispositivo
+          await BackgroundServiceNative.startService({ deviceAddress });
+        }
+      } catch (error) {
+        logger.error('Failed to connect BLE device to background service', 'BackgroundService', error instanceof Error ? error : new Error(String(error)));
+      }
+    }
+  }
+  
+  async disconnectBleDevice(): Promise<void> {
+    logger.info('Disconnecting BLE device from background service', 'BackgroundService');
+    this.connectedDeviceAddress = null;
+    
+    if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android') {
+      try {
+        if (BackgroundServiceNative && typeof BackgroundServiceNative.disconnectBleDevice === 'function') {
+          await BackgroundServiceNative.disconnectBleDevice();
+          logger.info('BLE device disconnected from background service', 'BackgroundService');
+        }
+      } catch (error) {
+        logger.error('Failed to disconnect BLE device from background service', 'BackgroundService', error instanceof Error ? error : new Error(String(error)));
+      }
+    }
+  }
+  
+  async isBleConnected(): Promise<boolean> {
+    if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android') {
+      try {
+        if (BackgroundServiceNative && typeof BackgroundServiceNative.isBleConnected === 'function') {
+          const result = await BackgroundServiceNative.isBleConnected();
+          return result?.connected || false;
+        }
+      } catch (error) {
+        logger.error('Failed to check BLE connection status', 'BackgroundService', error instanceof Error ? error : new Error(String(error)));
+      }
+    }
+    return false;
   }
 
   getIsEnabled(): boolean {

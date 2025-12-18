@@ -1,6 +1,10 @@
 package com.hollow.watch;
 
+import android.content.ComponentName;
+import android.content.Context;
 import android.content.Intent;
+import android.content.ServiceConnection;
+import android.os.IBinder;
 import android.util.Log;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -11,6 +15,23 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 @CapacitorPlugin(name = "BackgroundService")
 public class BackgroundServicePlugin extends Plugin {
     private static final String TAG = "BackgroundServicePlugin";
+    private BackgroundService backgroundService;
+    private boolean isServiceBound = false;
+    
+    private ServiceConnection serviceConnection = new ServiceConnection() {
+        @Override
+        public void onServiceConnected(ComponentName name, IBinder service) {
+            Log.d(TAG, "Service connected");
+            isServiceBound = true;
+        }
+        
+        @Override
+        public void onServiceDisconnected(ComponentName name) {
+            Log.d(TAG, "Service disconnected");
+            isServiceBound = false;
+            backgroundService = null;
+        }
+    };
 
     @PluginMethod
     public void startService(PluginCall call) {
@@ -34,6 +55,13 @@ public class BackgroundServicePlugin extends Plugin {
 
             Log.d(TAG, "Creating Intent for BackgroundService");
             Intent serviceIntent = new Intent(serviceContext, BackgroundService.class);
+            
+            // Obtener dirección del dispositivo BLE si se proporciona
+            String deviceAddress = call.getString("deviceAddress");
+            if (deviceAddress != null && !deviceAddress.isEmpty()) {
+                serviceIntent.putExtra("device_address", deviceAddress);
+                Log.d(TAG, "Device address provided: " + deviceAddress);
+            }
             
             Log.d(TAG, "Android SDK version: " + android.os.Build.VERSION.SDK_INT);
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
@@ -80,6 +108,83 @@ public class BackgroundServicePlugin extends Plugin {
         } catch (Exception e) {
             Log.e(TAG, "Exception in startService: " + e.getMessage(), e);
             call.reject("Failed to start service: " + e.getMessage(), e);
+        }
+    }
+    
+    @PluginMethod
+    public void connectBleDevice(PluginCall call) {
+        Log.d(TAG, "connectBleDevice() called");
+        try {
+            String deviceAddress = call.getString("deviceAddress");
+            if (deviceAddress == null || deviceAddress.isEmpty()) {
+                call.reject("Device address is required");
+                return;
+            }
+            
+            android.content.Context context = getContext();
+            if (context == null) {
+                call.reject("Context is null");
+                return;
+            }
+            
+            Intent serviceIntent = new Intent(context, BackgroundService.class);
+            serviceIntent.putExtra("device_address", deviceAddress);
+            
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                context.startForegroundService(serviceIntent);
+            } else {
+                context.startService(serviceIntent);
+            }
+            
+            JSObject result = new JSObject();
+            result.put("success", true);
+            call.resolve(result);
+        } catch (Exception e) {
+            Log.e(TAG, "Exception in connectBleDevice: " + e.getMessage(), e);
+            call.reject("Failed to connect BLE device: " + e.getMessage(), e);
+        }
+    }
+    
+    @PluginMethod
+    public void disconnectBleDevice(PluginCall call) {
+        Log.d(TAG, "disconnectBleDevice() called");
+        try {
+            android.content.Context context = getContext();
+            if (context == null) {
+                call.reject("Context is null");
+                return;
+            }
+            
+            Intent serviceIntent = new Intent(context, BackgroundService.class);
+            serviceIntent.setAction("DISCONNECT_BLE");
+            
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                context.startForegroundService(serviceIntent);
+            } else {
+                context.startService(serviceIntent);
+            }
+            
+            JSObject result = new JSObject();
+            result.put("success", true);
+            call.resolve(result);
+        } catch (Exception e) {
+            Log.e(TAG, "Exception in disconnectBleDevice: " + e.getMessage(), e);
+            call.reject("Failed to disconnect BLE device: " + e.getMessage(), e);
+        }
+    }
+    
+    @PluginMethod
+    public void isBleConnected(PluginCall call) {
+        Log.d(TAG, "isBleConnected() called");
+        try {
+            // Por ahora retornamos false, en una implementación completa
+            // necesitaríamos acceder al servicio para verificar el estado
+            JSObject result = new JSObject();
+            result.put("connected", false);
+            call.resolve(result);
+        } catch (Exception e) {
+            Log.e(TAG, "Exception in isBleConnected: " + e.getMessage(), e);
+            call.reject("Failed to check BLE connection: " + e.getMessage(), e);
         }
     }
 

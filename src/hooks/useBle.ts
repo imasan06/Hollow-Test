@@ -310,6 +310,25 @@ export function useBle(): UseBleReturn {
               }
             }
 
+            // Conectar el dispositivo BLE al servicio en segundo plano nativo
+            // Solo si no estamos en modo mock y tenemos un deviceId válido (dirección MAC)
+            if (!APP_CONFIG.BLE_MOCK_MODE) {
+              const deviceId = bleManager.getDeviceId();
+              if (deviceId && deviceId.match(/^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/)) {
+                try {
+                  logger.debug(`Connecting BLE device to native service: ${deviceId}`, 'Hook');
+                  await backgroundService.connectBleDevice(deviceId);
+                  logger.info(`✅ BLE device connected to native background service: ${deviceId}`, 'Hook');
+                } catch (error) {
+                  logger.warn('Failed to connect BLE device to native background service', 'Hook', error instanceof Error ? error : new Error(String(error)));
+                }
+              } else {
+                logger.debug(`Skipping native BLE connection - invalid deviceId format: ${deviceId}`, 'Hook');
+              }
+            } else {
+              logger.debug('Skipping native BLE connection - mock mode enabled', 'Hook');
+            }
+
             toast({
               title: 'Connected',
               description: `Connected to ${bleManager.getDeviceName() || 'watch'}`,
@@ -317,6 +336,14 @@ export function useBle(): UseBleReturn {
           } else if (state === 'disconnected') {
             timeSyncService.stop();
             logger.debug('TimeSyncService stopped', 'Hook');
+
+            // Desconectar el dispositivo BLE del servicio en segundo plano
+            try {
+              await backgroundService.disconnectBleDevice();
+              logger.debug('BLE device disconnected from native background service', 'Hook');
+            } catch (error) {
+              logger.warn('Failed to disconnect BLE device from native background service', 'Hook');
+            }
 
             try {
               await backgroundService.disable();
