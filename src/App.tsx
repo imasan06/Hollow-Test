@@ -8,12 +8,13 @@ import Index from "./pages/Index";
 import NotFound from "./pages/NotFound";
 import { Settings } from "./pages/Settings";
 import { backgroundService } from "./services/backgroundService";
+import { App } from "@capacitor/app";
 import { Capacitor } from "@capacitor/core";
 import { logger } from "./utils/logger";
 
 const queryClient = new QueryClient();
 
-const App = () => {
+const AppComponent = () => {
   useEffect(() => {
     console.log('🔵 App.tsx useEffect ejecutado');
     console.log('🔵 Capacitor.isNativePlatform():', Capacitor.isNativePlatform());
@@ -36,6 +37,39 @@ const App = () => {
       console.log('ℹ️ App iniciada en plataforma no-Android, no se inicia Foreground Service');
       logger.debug('App iniciada en plataforma no-Android, no se inicia Foreground Service', 'App');
     }
+
+    // Listener para cuando la app va a segundo plano
+    if (Capacitor.isNativePlatform()) {
+      const handleAppStateChange = async (state: { isActive: boolean }) => {
+        if (state.isActive) {
+          logger.info('App moved to foreground', 'App');
+          console.log('🔵 App moved to foreground');
+        } else {
+          logger.info('App moved to background - maintaining BLE connection', 'App');
+          console.log('🔵 App moved to background - maintaining BLE connection');
+          
+          // Asegurar que el servicio en segundo plano esté activo
+          if (Capacitor.getPlatform() === 'android') {
+            try {
+              if (!backgroundService.getIsEnabled()) {
+                await backgroundService.enable();
+                logger.info('Background service enabled when app went to background', 'App');
+              }
+            } catch (error) {
+              logger.error('Failed to enable background service when going to background', 'App', error instanceof Error ? error : new Error(String(error)));
+            }
+          }
+        }
+      };
+
+      App.addListener('appStateChange', handleAppStateChange);
+      logger.debug('App state change listener registered', 'App');
+
+      return () => {
+        App.removeAllListeners();
+        logger.debug('App state change listeners removed', 'App');
+      };
+    }
   }, []);
 
   return (
@@ -55,4 +89,4 @@ const App = () => {
   );
 };
 
-export default App;
+export default AppComponent;

@@ -28,4 +28,31 @@ public class MainActivity extends BridgeActivity {
             );
         }
     }
+
+    @Override
+    public void onPause() {
+        super.onPause();
+        Log.d(TAG, "MainActivity onPause() - App going to background");
+        // No pausar el WebView para mantener la conexión BLE activa
+        // El servicio en segundo plano mantendrá la app viva
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        Log.d(TAG, "MainActivity onResume() - App coming to foreground");
+    }
+
+    @Override
+    public void onStop() {
+        super.onStop();
+        Log.d(TAG, "MainActivity onStop() - App stopped");
+        // No detener el WebView para mantener la conexión BLE activa
+    }
+
+    @Override
+    public void onDestroy() {
+        Log.d(TAG, "MainActivity onDestroy() - Activity being destroyed");
+        super.onDestroy();
+    }
 }
