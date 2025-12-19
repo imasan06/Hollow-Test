@@ -81,12 +81,15 @@ export function encodeWavBase64(samples: Int16Array): string {
 
 
 function uint8ArrayToBase64(bytes: Uint8Array): string {
+  // Optimized base64 encoding for better performance
+  // Use chunked approach to avoid stack overflow and improve performance
   let binary = '';
-  const chunkSize = 0x8000; 
+  const chunkSize = 0x8000; // 32KB chunks
   
   for (let i = 0; i < bytes.length; i += chunkSize) {
     const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
-    binary += String.fromCharCode.apply(null, Array.from(chunk));
+    // Use spread operator for better performance than Array.from
+    binary += String.fromCharCode(...chunk);
   }
   
   return btoa(binary);

@@ -1,11 +1,14 @@
 package com.hollow.watch;
 
+import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.ServiceConnection;
 import android.os.IBinder;
 import android.util.Log;
+import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -17,6 +20,7 @@ public class BackgroundServicePlugin extends Plugin {
     private static final String TAG = "BackgroundServicePlugin";
     private BackgroundService backgroundService;
     private boolean isServiceBound = false;
+    private BroadcastReceiver bleEventReceiver;
     
     private ServiceConnection serviceConnection = new ServiceConnection() {
         @Override
@@ -32,6 +36,68 @@ public class BackgroundServicePlugin extends Plugin {
             backgroundService = null;
         }
     };
+    
+    @Override
+    public void load() {
+        super.load();
+        
+        // Registrar BroadcastReceiver para eventos BLE del servicio
+        bleEventReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                String eventName = intent.getStringExtra("eventName");
+                if (eventName == null) return;
+                
+                JSObject jsData = new JSObject();
+                jsData.put("name", eventName);
+                
+                if (intent.hasExtra("value")) {
+                    jsData.put("value", intent.getBooleanExtra("value", false));
+                } else if (intent.hasExtra("error")) {
+                    jsData.put("error", intent.getStringExtra("error"));
+                } else if (intent.hasExtra("data")) {
+                    jsData.put("data", intent.getStringExtra("data"));
+                }
+                
+                // Enviar evento a JavaScript usando WebView
+                android.webkit.WebView webView = getBridge().getWebView();
+                if (webView != null) {
+                    String jsCode = String.format(
+                        "window.dispatchEvent(new CustomEvent('%s', { detail: %s }));",
+                        eventName,
+                        jsData.toString()
+                    );
+                    
+                    // Usar evaluateJavascript (método de Android WebView)
+                    webView.post(() -> {
+                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.KITKAT) {
+                            webView.evaluateJavascript(jsCode, null);
+                        } else {
+                            // Fallback para versiones antiguas
+                            webView.loadUrl("javascript:" + jsCode);
+                        }
+                    });
+                    Log.d(TAG, "Event sent to JavaScript: " + eventName);
+                } else {
+                    Log.w(TAG, "WebView is null, cannot send event to JavaScript");
+                }
+            }
+        };
+        
+        IntentFilter filter = new IntentFilter("com.hollow.watch.BLE_EVENT");
+        LocalBroadcastManager.getInstance(getContext()).registerReceiver(bleEventReceiver, filter);
+        Log.d(TAG, "BLE event receiver registered");
+    }
+    
+    @Override
+    public void handleOnDestroy() {
+        super.handleOnDestroy();
+        if (bleEventReceiver != null) {
+            LocalBroadcastManager.getInstance(getContext()).unregisterReceiver(bleEventReceiver);
+            bleEventReceiver = null;
+            Log.d(TAG, "BLE event receiver unregistered");
+        }
+    }
 
     @PluginMethod
     public void startService(PluginCall call) {

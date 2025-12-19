@@ -148,7 +148,10 @@ export async function formatConversationContext(excludeLastUserMessage?: boolean
   const allMessages = await getLastTurns(MAX_CONVERSATION_TURNS);
 
   if (allMessages.length === 0) {
-    logger.debug('No conversation history to format', 'Storage');
+    // Only log in dev mode
+    if (import.meta.env.DEV) {
+      logger.debug('No conversation history to format', 'Storage');
+    }
     return '';
   }
 
@@ -160,7 +163,10 @@ export async function formatConversationContext(excludeLastUserMessage?: boolean
     const lastMessage = sortedMessages[sortedMessages.length - 1];
     if (lastMessage.role === 'user') {
       messagesToFormat = sortedMessages.slice(0, -1);
-      logger.debug(`Excluding last user message from context to avoid duplication`, 'Storage');
+      // Only log in dev mode
+      if (import.meta.env.DEV) {
+        logger.debug(`Excluding last user message from context to avoid duplication`, 'Storage');
+      }
     }
   }
   

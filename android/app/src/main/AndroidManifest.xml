@@ -45,7 +45,8 @@
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="connectedDevice"
-            android:stopWithTask="false" />
+            android:stopWithTask="false"
+            android:process=":background" />
     </application>
 
     <!-- Permissions -->

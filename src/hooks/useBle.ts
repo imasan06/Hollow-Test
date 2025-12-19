@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
+import { Capacitor } from '@capacitor/core';
 import { bleManager, ConnectionState, VoiceState } from '@/ble/bleManager';
 import { decodeImaAdpcm } from '@/audio/imaDecoder';
 import { encodeWavBase64, getAudioDuration, validateWavFormat } from '@/audio/wavEncoder';
@@ -112,27 +113,43 @@ export function useBle(): UseBleReturn {
         }
 
 
+        // Check if in background for performance optimizations
+        const isBackground = document.visibilityState === 'hidden' || (typeof window !== 'undefined' && !document.hasFocus());
+        
         const decodeStart = performance.now();
         const { samples } = decodeImaAdpcm(adpcmData);
         const decodeTime = performance.now() - decodeStart;
-        logger.debug(`Decoded to PCM samples: ${samples.length} (${decodeTime.toFixed(2)}ms)`, 'Hook');
-
+        
+        // Only log detailed timing in foreground or dev mode
+        if (!isBackground || import.meta.env.DEV) {
+          logger.debug(`Decoded to PCM samples: ${samples.length} (${decodeTime.toFixed(2)}ms)`, 'Hook');
+        }
 
         const duration = getAudioDuration(samples.length);
         setAudioDuration(duration);
-        logger.debug(`Audio duration: ${duration.toFixed(2)} seconds`, 'Hook');
+        
+        if (!isBackground || import.meta.env.DEV) {
+          logger.debug(`Audio duration: ${duration.toFixed(2)} seconds`, 'Hook');
+        }
 
         const encodeStart = performance.now();
         const wavBase64 = encodeWavBase64(samples);
         const encodeTime = performance.now() - encodeStart;
-        logger.debug(`WAV base64 length: ${wavBase64.length} (${encodeTime.toFixed(2)}ms)`, 'Hook');
+        
+        if (!isBackground || import.meta.env.DEV) {
+          logger.debug(`WAV base64 length: ${wavBase64.length} (${encodeTime.toFixed(2)}ms)`, 'Hook');
+        }
 
         const validation = validateWavFormat(wavBase64);
         if (!validation.valid) {
           logger.error(`WAV validation failed: ${validation.error}`, 'Hook');
           throw new Error(`Invalid WAV format: ${validation.error}`);
         }
-        logger.debug(`WAV validated: ${validation.sampleRate}Hz, ${validation.channels} channel(s)`, 'Hook');
+        
+        // Only log validation details in foreground or dev mode
+        if (!isBackground || import.meta.env.DEV) {
+          logger.debug(`WAV validated: ${validation.sampleRate}Hz, ${validation.channels} channel(s)`, 'Hook');
+        }
 
         // Skip detailed audio quality checks in background for performance
         // Only log if in development mode
@@ -181,18 +198,21 @@ export function useBle(): UseBleReturn {
           setLastTranscription(transcriptionResult.transcription);
           logger.debug(`Transcription: ${transcriptionResult.transcription}`, 'Hook');
 
-          await appendMessage({
-            role: 'user',
-            text: transcriptionResult.transcription,
-            timestamp: Date.now(),
-          });
-          logger.debug('User message saved to conversation history', 'Hook');
+          // Save user message and get context in parallel for better performance
+          const [_, conversationContext] = await Promise.all([
+            appendMessage({
+              role: 'user',
+              text: transcriptionResult.transcription,
+              timestamp: Date.now(),
+            }),
+            formatConversationContext(true),
+          ]);
 
-          await new Promise(resolve => setTimeout(resolve, 50));
-
-          // Exclude the last user message from context to avoid duplication (it's already in the transcript)
-          const conversationContext = await formatConversationContext(true);
-          logger.debug(`Context for AI request: ${conversationContext ? `${conversationContext.length} chars` : 'empty'}`, 'Hook');
+          // Only log in foreground or dev mode
+          if (document.visibilityState === 'visible' || import.meta.env.DEV) {
+            logger.debug('User message saved to conversation history', 'Hook');
+            logger.debug(`Context for AI request: ${conversationContext ? `${conversationContext.length} chars` : 'empty'}`, 'Hook');
+          }
 
           apiResponse = await sendTranscription({ 
             text: transcriptionResult.transcription,
@@ -264,6 +284,67 @@ export function useBle(): UseBleReturn {
     []
   );
 
+
+  // Listener para eventos del servicio nativo de background (alta prioridad)
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+
+    const handleNativeEvent = (event: CustomEvent) => {
+      try {
+        const eventName = event.detail?.name || event.type;
+        const eventData = event.detail?.data || {};
+
+        logger.debug(`Native background event received: ${eventName}`, 'Hook');
+
+        switch (eventName) {
+          case 'bleConnectionStateChanged':
+            const connected = eventData.value === true;
+            setConnectionState(connected ? 'connected' : 'disconnected');
+            if (connected) {
+              timeSyncService.start();
+            }
+            break;
+
+          case 'bleAudioData':
+            // Procesar audio recibido del servicio nativo (alta prioridad)
+            if (eventData.data) {
+              try {
+                // Convertir base64 a Uint8Array
+                const binaryString = atob(eventData.data);
+                const bytes = new Uint8Array(binaryString.length);
+                for (let i = 0; i < binaryString.length; i++) {
+                  bytes[i] = binaryString.charCodeAt(i);
+                }
+                // Procesar audio directamente (evita depender del WebView limitado)
+                processAudio(bytes, 'VOICE');
+              } catch (error) {
+                logger.error('Error processing native audio data', 'Hook', error instanceof Error ? error : new Error(String(error)));
+              }
+            }
+            break;
+
+          case 'bleError':
+            const errorMsg = eventData.error || 'Unknown BLE error';
+            setLastError(errorMsg);
+            logger.error('BLE error from native service', 'Hook', new Error(errorMsg));
+            break;
+        }
+      } catch (error) {
+        logger.error('Error handling native event', 'Hook', error instanceof Error ? error : new Error(String(error)));
+      }
+    };
+
+    // Escuchar eventos de Capacitor (funciona incluso en background)
+    window.addEventListener('bleConnectionStateChanged', handleNativeEvent as EventListener);
+    window.addEventListener('bleAudioData', handleNativeEvent as EventListener);
+    window.addEventListener('bleError', handleNativeEvent as EventListener);
+
+    return () => {
+      window.removeEventListener('bleConnectionStateChanged', handleNativeEvent as EventListener);
+      window.removeEventListener('bleAudioData', handleNativeEvent as EventListener);
+      window.removeEventListener('bleError', handleNativeEvent as EventListener);
+    };
+  }, [processAudio]);
 
   const initializeBle = useCallback(async () => {
     if (isInitialized.current) return;

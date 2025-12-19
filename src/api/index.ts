@@ -67,9 +67,12 @@ async function getUserId(): Promise<string> {
 const inFlightRequests = new Map<string, Promise<TranscribeResponse>>();
 
 function getRequestKey(request: TranscribeRequest): string {
+  // Create a more reliable key that ignores context variations
   const text = request.text || '';
-  const audio = request.audio ? request.audio.substring(0, 50) : ''; // Use first 50 chars of audio as key
-  return `${text}_${audio}_${request.context?.substring(0, 100) || ''}`;
+  const audio = request.audio ? request.audio.substring(0, 50) : '';
+  // Use a hash of context length instead of content to catch duplicates even if context slightly differs
+  const contextHash = request.context ? `${request.context.length}_${request.context.split('\n\n').length}` : '';
+  return `${text}_${audio}_${contextHash}`;
 }
 
 export async function sendTranscription(request: TranscribeRequest): Promise<TranscribeResponse> {
@@ -104,6 +107,11 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
       const transcribeUrl = `${API_ENDPOINT}/transcribe/base64`;
       const isNative = Capacitor.isNativePlatform();
 
+      // Check if app is in background for optimized timeouts
+      const isBackground = document.visibilityState === 'hidden' || (typeof window !== 'undefined' && !document.hasFocus());
+      const connectTimeout = isBackground ? 15000 : 30000; // 15s in background, 30s in foreground
+      const readTimeout = isBackground ? 45000 : 60000; // 45s in background, 60s in foreground
+
       const audioPayload = {
         audio: request.audio,
         ...(user_id && { user_id }),
@@ -119,8 +127,8 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
             'X-User-Token': backendToken,
           },
           data: audioPayload,
-          connectTimeout: 30000,
-          readTimeout: 60000,
+          connectTimeout,
+          readTimeout,
         });
       } else {
         const response = await fetch(transcribeUrl, {
@@ -177,17 +185,22 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
       );
     }
 
+    // Check if in background for performance optimizations
+    const isBackground = typeof document !== 'undefined' && (document.visibilityState === 'hidden' || !document.hasFocus());
+    
     let conversationContext = request.context;
     if (!conversationContext) {
       // Exclude last user message to avoid duplication with current transcript
       conversationContext = await formatConversationContext(true);
     }
     
-    if (conversationContext) {
-      logger.debug(`Conversation context: ${conversationContext.length} chars`, 'API');
-      logger.debug(`Context preview (first 200 chars): ${conversationContext.substring(0, 200)}...`, 'API');
-    } else {
-      logger.warn('No conversation context available', 'API');
+    // Only log context details in foreground or dev mode
+    if (!isBackground || import.meta.env.DEV) {
+      if (conversationContext) {
+        logger.debug(`Conversation context: ${conversationContext.length} chars`, 'API');
+      } else {
+        logger.warn('No conversation context available', 'API');
+      }
     }
 
     const backendPayload: any = {
@@ -199,26 +212,27 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
 
     if (conversationContext && conversationContext.trim().length > 0) {
       backendPayload.context = conversationContext;
-      logger.debug(`Context added to payload (${conversationContext.length} chars)`, 'API');
       
-      const contextLines = conversationContext.split('\n\n');
-      const lastContextLine = contextLines[contextLines.length - 1];
-      logger.debug(`Last line in context being sent: ${lastContextLine.substring(0, 100)}...`, 'API');
-      
-      if (transcript && !lastContextLine.includes(transcript.substring(0, 30))) {
-        logger.warn(`Current transcript "${transcript.substring(0, 30)}..." not found in context last line!`, 'API');
+      // Only log detailed context info in foreground or dev mode
+      if (!isBackground || import.meta.env.DEV) {
+        logger.debug(`Context added to payload (${conversationContext.length} chars)`, 'API');
       }
-    } else {
-      logger.debug('No context added to payload (empty or null)', 'API');
     }
 
     const url = `${API_ENDPOINT}/v1/chat`;
     const isNative = Capacitor.isNativePlatform();
     const requestStart = performance.now();
 
-    logger.debug(`Sending chat request with payload keys: ${Object.keys(backendPayload).join(', ')}`, 'API');
-    if (backendPayload.context) {
-      logger.debug(`Payload includes context: ${backendPayload.context.length} chars`, 'API');
+    // Use the isBackground variable already declared above
+    const connectTimeout = isBackground ? 15000 : 30000; // 15s in background, 30s in foreground
+    const readTimeout = isBackground ? 45000 : 60000; // 45s in background, 60s in foreground
+
+    // Only log detailed info in foreground or dev mode
+    if (!isBackground || import.meta.env.DEV) {
+      logger.debug(`Sending chat request with payload keys: ${Object.keys(backendPayload).join(', ')}`, 'API');
+      if (backendPayload.context) {
+        logger.debug(`Payload includes context: ${backendPayload.context.length} chars`, 'API');
+      }
     }
 
     if (isNative) {
@@ -231,12 +245,15 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
             'X-User-Token': backendToken,
           },
           data: backendPayload,
-          connectTimeout: 30000,
-          readTimeout: 60000,
+          connectTimeout,
+          readTimeout,
         });
 
         const requestTime = performance.now() - requestStart;
-        logger.debug(`Chat request completed: ${nativeResponse.status} (${requestTime.toFixed(2)}ms)`, 'API');
+        // Only log request completion in foreground or dev mode
+        if (!isBackground || import.meta.env.DEV) {
+          logger.debug(`Chat request completed: ${nativeResponse.status} (${requestTime.toFixed(2)}ms)`, 'API');
+        }
 
         if (nativeResponse.status >= 400) {
           const errorData = typeof nativeResponse.data === 'string'
@@ -276,7 +293,9 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
     }
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 60000);
+    // Use optimized timeout based on background state
+    const fetchTimeout = isBackground ? 45000 : 60000;
+    const timeoutId = setTimeout(() => controller.abort(), fetchTimeout);
 
     const response = await fetch(url, {
       method: 'POST',
@@ -299,7 +318,10 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
     }
 
     const data = await response.json();
-    logger.debug(`Chat request completed successfully (${requestTime.toFixed(2)}ms)`, 'API');
+    // Only log in foreground or dev mode
+    if (!isBackground || import.meta.env.DEV) {
+      logger.debug(`Chat request completed successfully (${requestTime.toFixed(2)}ms)`, 'API');
+    }
 
     const answer = data.reply ?? data.answer ?? data.text ?? data.response ?? '';
 
