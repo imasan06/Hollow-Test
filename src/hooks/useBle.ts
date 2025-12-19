@@ -97,6 +97,18 @@ export function useBle(): UseBleReturn {
         return;
       }
 
+      // TIMING: Start of audio processing pipeline
+      const pipelineStart = performance.now();
+      const timing = {
+        capture: pipelineStart, // Audio received from BLE
+        audioProcessing: 0,    // ADPCM decode + WAV encode
+        transcription: 0,      // Transcription API call
+        contextFetch: 0,        // Context preparation
+        chatRequest: 0,         // Chat API call
+        responseSave: 0,        // Saving response to storage
+        bleSend: 0,             // Sending to watch via BLE
+        total: 0,               // Total pipeline time
+      };
 
       const sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       activeSessionId.current = sessionId;
@@ -106,7 +118,7 @@ export function useBle(): UseBleReturn {
       setVoiceState('processing');
 
       try {
-        logger.debug(`Processing ADPCM buffer, size: ${adpcmData.length}`, 'Hook');
+        logger.info(`[TIMING] Audio capture received: ${adpcmData.length} bytes`, 'Hook');
 
         if (adpcmData.length === 0) {
           throw new Error('No audio data received');
@@ -116,29 +128,16 @@ export function useBle(): UseBleReturn {
         // Check if in background for performance optimizations
         const isBackground = document.visibilityState === 'hidden' || (typeof window !== 'undefined' && !document.hasFocus());
         
-        const decodeStart = performance.now();
+        // TIMING: Audio processing (decode + encode)
+        const audioProcessingStart = performance.now();
         const { samples } = decodeImaAdpcm(adpcmData);
-        const decodeTime = performance.now() - decodeStart;
+        const wavBase64 = encodeWavBase64(samples);
+        timing.audioProcessing = performance.now() - audioProcessingStart;
         
-        // Only log detailed timing in foreground or dev mode
-        if (!isBackground || import.meta.env.DEV) {
-          logger.debug(`Decoded to PCM samples: ${samples.length} (${decodeTime.toFixed(2)}ms)`, 'Hook');
-        }
-
         const duration = getAudioDuration(samples.length);
         setAudioDuration(duration);
         
-        if (!isBackground || import.meta.env.DEV) {
-          logger.debug(`Audio duration: ${duration.toFixed(2)} seconds`, 'Hook');
-        }
-
-        const encodeStart = performance.now();
-        const wavBase64 = encodeWavBase64(samples);
-        const encodeTime = performance.now() - encodeStart;
-        
-        if (!isBackground || import.meta.env.DEV) {
-          logger.debug(`WAV base64 length: ${wavBase64.length} (${encodeTime.toFixed(2)}ms)`, 'Hook');
-        }
+        logger.info(`[TIMING] Audio processing (decode+encode): ${timing.audioProcessing.toFixed(2)}ms`, 'Hook');
 
         const validation = validateWavFormat(wavBase64);
         if (!validation.valid) {
@@ -189,16 +188,21 @@ export function useBle(): UseBleReturn {
             return;
           }
 
+          // TIMING: Transcription API call
+          const transcriptionStart = performance.now();
           const transcriptionResult = await sendTranscription({ audio: wavBase64 });
+          timing.transcription = performance.now() - transcriptionStart;
           
           if (!transcriptionResult.transcription) {
             throw new Error('No transcription received');
           }
 
           setLastTranscription(transcriptionResult.transcription);
+          logger.info(`[TIMING] Transcription API: ${timing.transcription.toFixed(2)}ms`, 'Hook');
           logger.debug(`Transcription: ${transcriptionResult.transcription}`, 'Hook');
 
-          // Save user message and get context in parallel for better performance
+          // TIMING: Context fetch and message save (in parallel)
+          const contextStart = performance.now();
           const [_, conversationContext] = await Promise.all([
             appendMessage({
               role: 'user',
@@ -207,17 +211,19 @@ export function useBle(): UseBleReturn {
             }),
             formatConversationContext(true),
           ]);
+          timing.contextFetch = performance.now() - contextStart;
+          
+          logger.info(`[TIMING] Context fetch + message save: ${timing.contextFetch.toFixed(2)}ms`, 'Hook');
 
-          // Only log in foreground or dev mode
-          if (document.visibilityState === 'visible' || import.meta.env.DEV) {
-            logger.debug('User message saved to conversation history', 'Hook');
-            logger.debug(`Context for AI request: ${conversationContext ? `${conversationContext.length} chars` : 'empty'}`, 'Hook');
-          }
-
+          // TIMING: Chat API call
+          const chatStart = performance.now();
           apiResponse = await sendTranscription({ 
             text: transcriptionResult.transcription,
             context: conversationContext || undefined,
           });
+          timing.chatRequest = performance.now() - chatStart;
+          
+          logger.info(`[TIMING] Chat API request: ${timing.chatRequest.toFixed(2)}ms`, 'Hook');
         }
 
 
@@ -235,23 +241,40 @@ export function useBle(): UseBleReturn {
 
         logger.debug(`AI Response received: ${apiResponse.text?.substring(0, 100)}`, 'Hook');
 
-
+        // TIMING: Save response to storage
+        const saveStart = performance.now();
         if (apiResponse.text) {
           await appendMessage({
             role: 'assistant',
             text: apiResponse.text,
             timestamp: Date.now(),
           });
-          logger.debug('AI response saved to conversation history', 'Hook');
+          timing.responseSave = performance.now() - saveStart;
+          logger.info(`[TIMING] Response save to storage: ${timing.responseSave.toFixed(2)}ms`, 'Hook');
         }
 
-
+        // TIMING: Send to watch via BLE
+        const bleStart = performance.now();
         if (activeSessionId.current === sessionId) {
           await bleManager.sendAiText(apiResponse.text);
-          logger.debug('Response sent to watch via BLE', 'Hook');
+          timing.bleSend = performance.now() - bleStart;
+          logger.info(`[TIMING] BLE send to watch: ${timing.bleSend.toFixed(2)}ms`, 'Hook');
         } else {
           logger.warn('Session changed, not sending response to watch', 'Hook');
         }
+
+        // TIMING: Calculate total and log summary
+        timing.total = performance.now() - pipelineStart;
+        logger.info(
+          `[TIMING SUMMARY] Total: ${timing.total.toFixed(2)}ms | ` +
+          `Audio: ${timing.audioProcessing.toFixed(2)}ms | ` +
+          `Transcription: ${timing.transcription.toFixed(2)}ms | ` +
+          `Context: ${timing.contextFetch.toFixed(2)}ms | ` +
+          `Chat: ${timing.chatRequest.toFixed(2)}ms | ` +
+          `Save: ${timing.responseSave.toFixed(2)}ms | ` +
+          `BLE: ${timing.bleSend.toFixed(2)}ms`,
+          'Hook'
+        );
 
         toast({
           title: 'Done',

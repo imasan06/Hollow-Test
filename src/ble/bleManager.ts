@@ -354,7 +354,10 @@ class BleManager {
 
 
   async sendAiText(text: string): Promise<void> {
-    return this.sendText(text);
+    const bleSendStart = performance.now();
+    await this.sendText(text);
+    const bleSendTime = performance.now() - bleSendStart;
+    logger.info(`[TIMING] BLE send to watch: ${bleSendTime.toFixed(2)}ms`, 'BLE');
   }
 
   async sendTime(): Promise<void> {

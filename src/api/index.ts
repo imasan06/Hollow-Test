@@ -117,6 +117,8 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
         ...(user_id && { user_id }),
       };
 
+      // TIMING: Transcription API request
+      const transcribeRequestStart = performance.now();
       let transcribeResponse;
       if (isNative) {
         transcribeResponse = await CapacitorHttp.request({
@@ -149,6 +151,8 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
           data: await response.json(),
         };
       }
+      const transcribeRequestTime = performance.now() - transcribeRequestStart;
+      logger.info(`[TIMING] Transcription HTTP request: ${transcribeRequestTime.toFixed(2)}ms`, 'API');
 
       if (transcribeResponse.status >= 200 && transcribeResponse.status < 300) {
         const data = typeof transcribeResponse.data === 'string'
@@ -221,9 +225,9 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
 
     const url = `${API_ENDPOINT}/v1/chat`;
     const isNative = Capacitor.isNativePlatform();
-    const requestStart = performance.now();
-
-    // Use the isBackground variable already declared above
+    
+    // TIMING: Chat API request
+    const chatRequestStart = performance.now();
     const connectTimeout = isBackground ? 15000 : 30000; // 15s in background, 30s in foreground
     const readTimeout = isBackground ? 45000 : 60000; // 45s in background, 60s in foreground
 
@@ -249,11 +253,8 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
           readTimeout,
         });
 
-        const requestTime = performance.now() - requestStart;
-        // Only log request completion in foreground or dev mode
-        if (!isBackground || import.meta.env.DEV) {
-          logger.debug(`Chat request completed: ${nativeResponse.status} (${requestTime.toFixed(2)}ms)`, 'API');
-        }
+        const chatRequestTime = performance.now() - chatRequestStart;
+        logger.info(`[TIMING] Chat HTTP request: ${chatRequestTime.toFixed(2)}ms`, 'API');
 
         if (nativeResponse.status >= 400) {
           const errorData = typeof nativeResponse.data === 'string'
@@ -309,7 +310,7 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
 
     clearTimeout(timeoutId);
 
-    const requestTime = performance.now() - requestStart;
+    const chatRequestTime = performance.now() - chatRequestStart;
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -318,10 +319,7 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
     }
 
     const data = await response.json();
-    // Only log in foreground or dev mode
-    if (!isBackground || import.meta.env.DEV) {
-      logger.debug(`Chat request completed successfully (${requestTime.toFixed(2)}ms)`, 'API');
-    }
+    logger.info(`[TIMING] Chat HTTP request: ${chatRequestTime.toFixed(2)}ms`, 'API');
 
     const answer = data.reply ?? data.answer ?? data.text ?? data.response ?? '';
 
