@@ -1,11 +1,10 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback, lazy, Suspense } from 'react';
 import { useBle } from '@/hooks/useBle';
 import { useAudioRecorder } from '@/hooks/useAudioRecorder';
 import { Button } from '@/components/ui/button';
 import { StatusIndicator } from '@/components/ui/StatusIndicator';
 import { VoiceVisualizer } from '@/components/ui/VoiceVisualizer';
 import { ResponseCard } from '@/components/ui/ResponseCard';
-import { ConversationHistory } from '@/components/ui/ConversationHistory';
 import { Mic, Square } from 'lucide-react';
 import {
   AlertDialog,
@@ -23,6 +22,9 @@ import { Badge } from '@/components/ui/badge';
 import { APP_CONFIG } from '@/config/app.config';
 import { getConversationHistory, ConversationMessage } from '@/storage/conversationStore';
 import { logger } from '@/utils/logger';
+
+// OPTIMIZACIÓN: Lazy load del historial de conversación (no crítico para el primer render)
+const ConversationHistory = lazy(() => import('@/components/ui/ConversationHistory').then(m => ({ default: m.ConversationHistory })));
 
 export function WatchApp() {
   const navigate = useNavigate();
@@ -119,12 +121,29 @@ export function WatchApp() {
   }, [lastResponse, lastTranscription, recordingResponse, recordingTranscription]);
 
   useEffect(() => {
-    // Load on mount and when new messages are added
-    loadHistory();
+    // Diferir carga de historial para no bloquear el render inicial
+    // Usar requestIdleCallback si está disponible, sino setTimeout
+    const loadDeferred = () => {
+      loadHistory();
+    };
+
+    let handle: number | ReturnType<typeof setTimeout>;
+    
+    if ('requestIdleCallback' in window) {
+      handle = (window as any).requestIdleCallback(loadDeferred, { timeout: 500 });
+    } else {
+      // Fallback: cargar después de 100ms para permitir render inicial
+      handle = setTimeout(loadDeferred, 100);
+    }
 
     return () => {
       if (loadHistoryTimeoutRef.current) {
         clearTimeout(loadHistoryTimeoutRef.current);
+      }
+      if ('requestIdleCallback' in window && typeof handle === 'number') {
+        (window as any).cancelIdleCallback(handle);
+      } else if (typeof handle !== 'number') {
+        clearTimeout(handle);
       }
     };
   }, [loadHistory]);
@@ -357,10 +376,12 @@ export function WatchApp() {
                 </Button>
               </div>
               <div className="px-4">
-                <ConversationHistory 
-                  messages={conversationHistory} 
-                  onMessageDeleted={handleMessageDeleted}
-                />
+                <Suspense fallback={<div className="text-center text-muted-foreground text-sm py-4">Loading history...</div>}>
+                  <ConversationHistory 
+                    messages={conversationHistory} 
+                    onMessageDeleted={handleMessageDeleted}
+                  />
+                </Suspense>
               </div>
             </div>
           )}

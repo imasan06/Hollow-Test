@@ -40,29 +40,26 @@ public class BackgroundService extends Service {
             Process.setThreadPriority(Process.THREAD_PRIORITY_FOREGROUND);
             
             // Crear HandlerThread para procesamiento BLE de alta prioridad
+            // OPTIMIZACIÓN: Iniciar thread inmediatamente
             bleHandlerThread = new HandlerThread(BLE_HANDLER_THREAD, Process.THREAD_PRIORITY_FOREGROUND);
             bleHandlerThread.start();
             bleHandler = new Handler(bleHandlerThread.getLooper());
             
-            createNotificationChannel();
-            acquireWakeLock();
-            
-            // Inicializar el gestor BLE nativo en el handler thread de alta prioridad
-            bleHandler.post(() -> {
+            // OPTIMIZACIÓN: Iniciar BleConnectionManager en paralelo con otras inicializaciones
+            // Usar postAtFrontOfQueue para máxima prioridad
+            bleHandler.postAtFrontOfQueue(() -> {
                 bleManager = new BleConnectionManager(BackgroundService.this);
                 bleManager.setEventListener(new BleConnectionManager.BleEventListener() {
                     @Override
                     public void onConnectionStateChanged(boolean connected) {
                         android.util.Log.d("BackgroundService", "BLE connection state changed: " + connected);
                         updateNotification(connected);
-                        // Notificar a JavaScript a través del plugin
                         notifyJavaScript("bleConnectionStateChanged", connected);
                     }
                     
                     @Override
                     public void onCharacteristicChanged(byte[] data) {
                         android.util.Log.d("BackgroundService", "BLE data received: " + data.length + " bytes");
-                        // Procesar audio directamente en el servicio nativo (alta prioridad)
                         processAudioData(data);
                     }
                     
@@ -73,6 +70,10 @@ public class BackgroundService extends Service {
                     }
                 });
             });
+            
+            // OPTIMIZACIÓN: Estas operaciones corren en paralelo con la inicialización de BLE
+            createNotificationChannel();
+            acquireWakeLock();
             
             android.util.Log.d("BackgroundService", "Service created successfully");
         } catch (Exception e) {

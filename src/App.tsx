@@ -16,19 +16,21 @@ const queryClient = new QueryClient();
 
 const AppComponent = () => {
   useEffect(() => {
-    // Start Foreground Service on app startup (Android only)
+    let timerId: ReturnType<typeof setTimeout> | null = null;
+    
+    // OPTIMIZACIÓN: Iniciar Foreground Service de forma diferida para no bloquear el render
     if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android') {
-      logger.info('App started, initializing Foreground Service...', 'App');
-      
-      backgroundService.enable()
-        .then(() => {
-          logger.info('Foreground Service started successfully', 'App');
-        })
-        .catch((error) => {
-          logger.error('Error starting Foreground Service on app startup', 'App', error instanceof Error ? error : new Error(String(error)));
-        });
-    } else {
-      logger.debug('App started on non-Android platform, Foreground Service not started', 'App');
+      // Usar setTimeout(0) para diferir al siguiente tick del event loop
+      // Esto permite que React renderice la UI primero
+      timerId = setTimeout(() => {
+        backgroundService.enable()
+          .then(() => {
+            logger.info('Foreground Service started successfully', 'App');
+          })
+          .catch((error) => {
+            logger.error('Error starting Foreground Service on app startup', 'App', error instanceof Error ? error : new Error(String(error)));
+          });
+      }, 0);
     }
 
     // Listener for app background/foreground state changes
@@ -54,13 +56,16 @@ const AppComponent = () => {
       };
 
       App.addListener('appStateChange', handleAppStateChange);
-      logger.debug('App state change listener registered', 'App');
 
       return () => {
+        if (timerId) clearTimeout(timerId);
         App.removeAllListeners();
-        logger.debug('App state change listeners removed', 'App');
       };
     }
+    
+    return () => {
+      if (timerId) clearTimeout(timerId);
+    };
   }, []);
 
   return (

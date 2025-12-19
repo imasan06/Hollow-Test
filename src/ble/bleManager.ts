@@ -11,6 +11,7 @@ import { APP_CONFIG } from '@/config/app.config';
 import { MockBleService } from './mockBleService';
 import { BleMessageType } from '@/types/bleMessages';
 import { logger } from '@/utils/logger';
+import { isBlePreInitialized, waitForBleReady } from './bleBootstrap';
 
 export type ConnectionState = 'disconnected' | 'scanning' | 'connecting' | 'connected';
 export type VoiceState = 'idle' | 'listening' | 'processing' | 'responding';
@@ -54,6 +55,23 @@ class BleManager {
     }
 
     try {
+      // Usar pre-inicialización si ya está lista (ahorra ~100-200ms)
+      if (isBlePreInitialized()) {
+        logger.debug('Using pre-initialized BLE', 'BLE');
+        this.isInitialized = true;
+        return;
+      }
+
+      // Esperar pre-inicialización en progreso o inicializar ahora
+      await waitForBleReady();
+      
+      if (isBlePreInitialized()) {
+        logger.debug('BLE pre-initialization completed', 'BLE');
+        this.isInitialized = true;
+        return;
+      }
+
+      // Fallback: inicializar ahora si pre-inicialización falló
       await BleClient.initialize();
       this.isInitialized = true;
       logger.info('Initialized successfully', 'BLE');
