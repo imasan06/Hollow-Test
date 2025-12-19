@@ -135,7 +135,7 @@ public class BackgroundServicePlugin extends Plugin {
             } else {
                 context.startService(serviceIntent);
             }
-            
+
             JSObject result = new JSObject();
             result.put("success", true);
             call.resolve(result);
@@ -144,7 +144,7 @@ public class BackgroundServicePlugin extends Plugin {
             call.reject("Failed to connect BLE device: " + e.getMessage(), e);
         }
     }
-    
+
     @PluginMethod
     public void disconnectBleDevice(PluginCall call) {
         Log.d(TAG, "disconnectBleDevice() called");
@@ -163,7 +163,7 @@ public class BackgroundServicePlugin extends Plugin {
             } else {
                 context.startService(serviceIntent);
             }
-            
+
             JSObject result = new JSObject();
             result.put("success", true);
             call.resolve(result);

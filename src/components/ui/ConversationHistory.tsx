@@ -24,18 +24,8 @@ export function ConversationHistory({ messages, className, onMessageDeleted }: C
   const [selectedMessage, setSelectedMessage] = useState<ConversationMessage | null>(null);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
-
-  // Auto-scroll to bottom when messages change
-  useEffect(() => {
-    if (containerRef.current && messages.length > 0) {
-      // Small delay to ensure DOM is updated
-      setTimeout(() => {
-        if (containerRef.current) {
-          containerRef.current.scrollTop = containerRef.current.scrollHeight;
-        }
-      }, 50);
-    }
-  }, [messages]);
+  
+  // Note: Auto-scroll is handled by parent component (WatchApp) to avoid conflicts
 
   if (messages.length === 0) {
     return null;

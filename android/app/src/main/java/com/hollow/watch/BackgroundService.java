@@ -26,8 +26,8 @@ public class BackgroundService extends Service {
         super.onCreate();
         android.util.Log.d("BackgroundService", "onCreate() called");
         try {
-            createNotificationChannel();
-            acquireWakeLock();
+        createNotificationChannel();
+        acquireWakeLock();
             
             // Inicializar el gestor BLE nativo
             bleManager = new BleConnectionManager(this);
@@ -132,34 +132,34 @@ public class BackgroundService extends Service {
     
     private void updateNotification(boolean isConnected) {
         try {
-            Intent notificationIntent = new Intent(this, MainActivity.class);
-            PendingIntent pendingIntent = PendingIntent.getActivity(
-                this,
-                0,
-                notificationIntent,
-                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT
-            );
+        Intent notificationIntent = new Intent(this, MainActivity.class);
+        PendingIntent pendingIntent = PendingIntent.getActivity(
+            this,
+            0,
+            notificationIntent,
+            PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT
+        );
 
-            int iconResId = getResources().getIdentifier("ic_launcher", "mipmap", getPackageName());
-            if (iconResId == 0) {
-                iconResId = android.R.drawable.ic_dialog_info;
-            }
+        int iconResId = getResources().getIdentifier("ic_launcher", "mipmap", getPackageName());
+        if (iconResId == 0) {
+            iconResId = android.R.drawable.ic_dialog_info;
+        }
 
             String notificationText = isConnected 
                 ? "Conectado al reloj - Mantén la app minimizada" 
                 : "Manteniendo conexión con el reloj";
-            Notification notification = new NotificationCompat.Builder(this, CHANNEL_ID)
-                .setContentTitle("Hollow Watch")
+        Notification notification = new NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("Hollow Watch")
                 .setContentText(notificationText)
-                .setSmallIcon(iconResId)
-                .setContentIntent(pendingIntent)
-                .setOngoing(true)
-                .setPriority(NotificationCompat.PRIORITY_HIGH)
-                .setCategory(NotificationCompat.CATEGORY_SERVICE)
-                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                .setShowWhen(false)
-                .setOnlyAlertOnce(true)
-                .build();
+            .setSmallIcon(iconResId)
+            .setContentIntent(pendingIntent)
+            .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setShowWhen(false)
+            .setOnlyAlertOnce(true)
+            .build();
 
             NotificationManager manager = getSystemService(NotificationManager.class);
             if (manager != null) {
@@ -191,10 +191,26 @@ public class BackgroundService extends Service {
     
     // Métodos públicos para controlar la conexión BLE
     public void connectBleDevice(String deviceAddress) {
+        if (deviceAddress == null || deviceAddress.isEmpty()) {
+            android.util.Log.w("BackgroundService", "Invalid device address provided");
+            return;
+        }
+        
+        // Check if already connected to the same device
+        if (bleManager != null && bleManager.isConnected() && deviceAddress.equals(connectedDeviceAddress)) {
+            android.util.Log.d("BackgroundService", "Already connected to device: " + deviceAddress);
+            return;
+        }
+        
         connectedDeviceAddress = deviceAddress;
-        if (bleManager != null && deviceAddress != null && !deviceAddress.isEmpty()) {
+        if (bleManager != null) {
             android.util.Log.d("BackgroundService", "Connecting to BLE device: " + deviceAddress);
-            bleManager.connectToDevice(deviceAddress);
+            boolean connected = bleManager.connectToDevice(deviceAddress);
+            if (!connected) {
+                android.util.Log.w("BackgroundService", "Failed to initiate BLE connection");
+            }
+        } else {
+            android.util.Log.w("BackgroundService", "BLE manager not initialized");
         }
     }
     

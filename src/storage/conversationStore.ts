@@ -110,7 +110,7 @@ export async function deleteMessage(timestamp: number): Promise<boolean> {
 }
 
 
-export async function formatConversationContext(): Promise<string> {
+export async function formatConversationContext(excludeLastUserMessage?: boolean): Promise<string> {
   const allMessages = await getLastTurns(MAX_CONVERSATION_TURNS);
 
   if (allMessages.length === 0) {
@@ -119,7 +119,18 @@ export async function formatConversationContext(): Promise<string> {
   }
 
   const sortedMessages = allMessages.sort((a, b) => a.timestamp - b.timestamp);
-  const last12Pairs = sortedMessages.slice(-24);
+  
+  // If excludeLastUserMessage is true, remove the last user message to avoid duplication
+  let messagesToFormat = sortedMessages;
+  if (excludeLastUserMessage && sortedMessages.length > 0) {
+    const lastMessage = sortedMessages[sortedMessages.length - 1];
+    if (lastMessage.role === 'user') {
+      messagesToFormat = sortedMessages.slice(0, -1);
+      logger.debug(`Excluding last user message from context to avoid duplication`, 'Storage');
+    }
+  }
+  
+  const last12Pairs = messagesToFormat.slice(-24);
   
   logger.debug(`Formatting context from ${allMessages.length} total messages, taking last ${last12Pairs.length} messages`, 'Storage');
 

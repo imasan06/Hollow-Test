@@ -195,18 +195,9 @@ export function useBle(): UseBleReturn {
 
           await new Promise(resolve => setTimeout(resolve, 50));
 
-          const conversationContext = await formatConversationContext();
+          // Exclude the last user message from context to avoid duplication (it's already in the transcript)
+          const conversationContext = await formatConversationContext(true);
           logger.debug(`Context for AI request: ${conversationContext ? `${conversationContext.length} chars` : 'empty'}`, 'Hook');
-          
-          if (conversationContext) {
-            const contextLines = conversationContext.split('\n\n');
-            const lastContextLine = contextLines[contextLines.length - 1];
-            logger.debug(`Last context line: ${lastContextLine.substring(0, 100)}...`, 'Hook');
-            
-            if (!lastContextLine.includes(transcriptionResult.transcription.substring(0, 20))) {
-              logger.warn('Current user message not found in context!', 'Hook');
-            }
-          }
 
           apiResponse = await sendTranscription({ 
             text: transcriptionResult.transcription,

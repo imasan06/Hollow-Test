@@ -69,8 +69,14 @@ public class BleConnectionManager {
             return false;
         }
         
+        // Check if already connected to the same device
+        if (isConnected && connectedDevice != null && connectedDevice.getAddress().equals(deviceAddress)) {
+            Log.d(TAG, "Already connected to this device: " + deviceAddress);
+            return true;
+        }
+        
         if (isConnecting || isConnected) {
-            Log.w(TAG, "Already connecting or connected");
+            Log.w(TAG, "Already connecting or connected to different device");
             return false;
         }
         

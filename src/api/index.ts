@@ -63,15 +63,32 @@ async function getUserId(): Promise<string> {
   }
 }
 
+// Track in-flight requests to prevent duplicates
+const inFlightRequests = new Map<string, Promise<TranscribeResponse>>();
+
+function getRequestKey(request: TranscribeRequest): string {
+  const text = request.text || '';
+  const audio = request.audio ? request.audio.substring(0, 50) : ''; // Use first 50 chars of audio as key
+  return `${text}_${audio}_${request.context?.substring(0, 100) || ''}`;
+}
+
 export async function sendTranscription(request: TranscribeRequest): Promise<TranscribeResponse> {
-  try {
-    const user_id = await getUserId();
+  // Check if there's already an in-flight request with the same parameters
+  const requestKey = getRequestKey(request);
+  if (inFlightRequests.has(requestKey)) {
+    logger.debug('Duplicate request detected, reusing in-flight request', 'API');
+    return inFlightRequests.get(requestKey)!;
+  }
 
-    const activePreset = await getActivePreset();
-    const persona = request.persona || activePreset.persona || '';
-    const rules = request.rules || activePreset.rules || '';
+  const requestPromise = (async () => {
+    try {
+      const user_id = await getUserId();
 
-    logger.debug(`Using persona preset: "${activePreset.name}"`, 'API');
+      const activePreset = await getActivePreset();
+      const persona = request.persona || activePreset.persona || '';
+      const rules = request.rules || activePreset.rules || '';
+
+      logger.debug(`Using persona preset: "${activePreset.name}"`, 'API');
 
     let transcript = '';
     let localTranscription = '';
@@ -162,7 +179,8 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
 
     let conversationContext = request.context;
     if (!conversationContext) {
-      conversationContext = await formatConversationContext();
+      // Exclude last user message to avoid duplication with current transcript
+      conversationContext = await formatConversationContext(true);
     }
     
     if (conversationContext) {
@@ -292,10 +310,19 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
     };
 
     return normalizedData;
-  } catch (error) {
-    logger.error('Transcription request failed', 'API', error instanceof Error ? error : new Error(String(error)));
-    throw error;
-  }
+    } catch (error) {
+      logger.error('Transcription request failed', 'API', error instanceof Error ? error : new Error(String(error)));
+      throw error;
+    } finally {
+      // Remove from in-flight requests when done
+      inFlightRequests.delete(requestKey);
+    }
+  })();
+
+  // Store the promise for deduplication
+  inFlightRequests.set(requestKey, requestPromise);
+  
+  return requestPromise;
 }
 
 export async function checkApiHealth(): Promise<boolean> {

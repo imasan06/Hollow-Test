@@ -28,6 +28,7 @@ export interface BleManagerCallbacks {
 
 class BleManager {
   private device: BleDevice | null = null;
+  private lastDeviceId: string | null = null; // Store device ID for reconnection
   private callbacks: BleManagerCallbacks | null = null;
   private mode: 'VOICE' | 'SILENT' = 'VOICE';
   private audioBuffer: Uint8Array[] = [];
@@ -136,6 +137,9 @@ class BleManager {
       });
 
       logger.info('Connected', 'BLE');
+      
+      // Store device ID for potential reconnection
+      this.lastDeviceId = this.device.deviceId;
 
       await BleClient.startNotifications(
         this.device.deviceId,
@@ -400,40 +404,88 @@ class BleManager {
   }
 
   private handleDisconnect(): void {
+    logger.info('Device disconnected', 'BLE');
     this.callbacks?.onConnectionStateChange('disconnected');
     this.callbacks?.onVoiceStateChange('idle');
     this.isVoiceMode = false;
     this.chunkCounter = 0;
+    this.clearAudioBuffer();
 
     if (this.mockMode) {
+      this.device = null;
+      this.lastDeviceId = null;
       return;
     }
 
-    this.attemptReconnect();
+    // Only attempt reconnect if we have a device ID and haven't exceeded max attempts
+    if (this.lastDeviceId && this.reconnectAttempts < BLE_CONFIG.MAX_RECONNECT_ATTEMPTS) {
+      this.attemptReconnect();
+    } else if (this.reconnectAttempts >= BLE_CONFIG.MAX_RECONNECT_ATTEMPTS) {
+      logger.warn('Max reconnection attempts reached, stopping', 'BLE');
+      this.callbacks?.onError?.('Connection lost. Please reconnect manually.');
+      this.device = null;
+      this.lastDeviceId = null;
+    } else {
+      this.device = null;
+    }
   }
 
   private async attemptReconnect(): Promise<void> {
     if (this.reconnectAttempts >= BLE_CONFIG.MAX_RECONNECT_ATTEMPTS) {
       logger.warn('Max reconnect attempts reached', 'BLE');
       this.callbacks?.onError?.('Unable to reconnect. Please scan again.');
+      this.device = null;
+      this.lastDeviceId = null;
+      return;
+    }
+
+    if (!this.lastDeviceId) {
+      logger.warn('No device ID available for reconnection', 'BLE');
       return;
     }
 
     this.reconnectAttempts++;
-    logger.debug(`Reconnect attempt ${this.reconnectAttempts}/${BLE_CONFIG.MAX_RECONNECT_ATTEMPTS}`, 'BLE');
+    logger.info(`Reconnect attempt ${this.reconnectAttempts}/${BLE_CONFIG.MAX_RECONNECT_ATTEMPTS}`, 'BLE');
 
-    await new Promise(resolve => setTimeout(resolve, BLE_CONFIG.RECONNECT_DELAY));
+    // Exponential backoff: 2s, 4s, 8s, etc.
+    const delay = BLE_CONFIG.RECONNECT_DELAY * Math.pow(2, this.reconnectAttempts - 1);
+    await new Promise(resolve => setTimeout(resolve, delay));
 
-    if (this.device) {
-      try {
-        await this.connectReal();
-      } catch (error) {
-        logger.error('Reconnect failed', 'BLE', error instanceof Error ? error : new Error(String(error)));
+    try {
+      // Try to reconnect using the stored device ID
+      await BleClient.connect(this.lastDeviceId, (deviceId) => {
+        logger.info(`Disconnected during reconnect: ${deviceId}`, 'BLE');
+        this.handleDisconnect();
+      });
+
+      logger.info('Reconnected successfully', 'BLE');
+      
+      // Recreate device object for notifications
+      this.device = { deviceId: this.lastDeviceId } as BleDevice;
+
+      await BleClient.startNotifications(
+        this.lastDeviceId,
+        SERVICE_UUID,
+        AUDIO_CHAR_UUID,
+        (value) => this.handleAudioNotification(value)
+      );
+
+      logger.debug('Subscribed to audio notifications after reconnect', 'BLE');
+      this.callbacks?.onConnectionStateChange('connected');
+      this.reconnectAttempts = 0;
+    } catch (error) {
+      logger.error('Reconnect failed', 'BLE', error instanceof Error ? error : new Error(String(error)));
+      // Will retry if attempts < max
+      if (this.reconnectAttempts < BLE_CONFIG.MAX_RECONNECT_ATTEMPTS) {
+        this.attemptReconnect();
       }
     }
   }
 
   async disconnect(): Promise<void> {
+    // Reset reconnection attempts on manual disconnect
+    this.reconnectAttempts = BLE_CONFIG.MAX_RECONNECT_ATTEMPTS;
+    
     if (this.device && !this.mockMode) {
       try {
         await BleClient.stopNotifications(
@@ -446,6 +498,9 @@ class BleManager {
         logger.error('Disconnect error', 'BLE', error instanceof Error ? error : new Error(String(error)));
       }
     }
+    
+    this.device = null;
+    this.lastDeviceId = null;
 
     if (this.mockMode) {
       this.mockService?.disconnect();
