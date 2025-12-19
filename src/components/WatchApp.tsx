@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { useBle } from '@/hooks/useBle';
 import { useAudioRecorder } from '@/hooks/useAudioRecorder';
 import { Button } from '@/components/ui/button';
@@ -54,7 +54,6 @@ export function WatchApp() {
   
   const [conversationHistory, setConversationHistory] = useState<ConversationMessage[]>([]);
   const [isClearAllDialogOpen, setIsClearAllDialogOpen] = useState(false);
-  const historyScrollRef = useRef<HTMLDivElement>(null);
   const wasRecordingRef = useRef(false);
   
   const isConnected = connectionState === 'connected';
@@ -70,47 +69,79 @@ export function WatchApp() {
   }, [isRecordingAudio, isProcessingAudio, processRecordedAudio]);
 
   // Load conversation history (excluding current session messages)
-  const loadHistory = async () => {
-    try {
-      const history = await getConversationHistory();
-      // Filter out current session messages to avoid duplicates
-      const filtered = history.filter((msg) => {
-        // Exclude if it matches current transcription or response (from BLE or audio recorder)
-        const currentTranscription = recordingTranscription || lastTranscription;
-        const currentResponse = recordingResponse || lastResponse;
-        if (currentTranscription && msg.role === 'user' && msg.text === currentTranscription) {
-          return false;
-        }
-        if (currentResponse && msg.role === 'assistant' && msg.text === currentResponse) {
-          return false;
-        }
-        return true;
-      });
-      // Sort by timestamp (oldest first for display)
-      const sorted = filtered.sort((a, b) => a.timestamp - b.timestamp);
-      setConversationHistory(sorted);
-    } catch (error) {
-      logger.error('Failed to load conversation history', 'WatchApp', error instanceof Error ? error : new Error(String(error)));
+  const loadHistoryRef = useRef<Promise<void> | null>(null);
+  const loadHistoryTimeoutRef = useRef<number | null>(null);
+  
+  const loadHistory = useCallback(async () => {
+    // Cancel pending load
+    if (loadHistoryTimeoutRef.current) {
+      clearTimeout(loadHistoryTimeoutRef.current);
+      loadHistoryTimeoutRef.current = null;
     }
-  };
+
+    // If already loading, wait for it
+    if (loadHistoryRef.current) {
+      await loadHistoryRef.current;
+      return;
+    }
+
+    // Debounce: wait 300ms before loading
+    loadHistoryRef.current = new Promise((resolve) => {
+      loadHistoryTimeoutRef.current = window.setTimeout(async () => {
+        try {
+          const history = await getConversationHistory();
+          // Filter out current session messages to avoid duplicates
+          const filtered = history.filter((msg) => {
+            // Exclude if it matches current transcription or response (from BLE or audio recorder)
+            const currentTranscription = recordingTranscription || lastTranscription;
+            const currentResponse = recordingResponse || lastResponse;
+            if (currentTranscription && msg.role === 'user' && msg.text === currentTranscription) {
+              return false;
+            }
+            if (currentResponse && msg.role === 'assistant' && msg.text === currentResponse) {
+              return false;
+            }
+            return true;
+          });
+          // Sort by timestamp (oldest first for display)
+          const sorted = filtered.sort((a, b) => a.timestamp - b.timestamp);
+          setConversationHistory(sorted);
+        } catch (error) {
+          logger.error('Failed to load conversation history', 'WatchApp', error instanceof Error ? error : new Error(String(error)));
+        } finally {
+          loadHistoryRef.current = null;
+          resolve();
+        }
+      }, 300);
+    });
+
+    await loadHistoryRef.current;
+  }, [lastResponse, lastTranscription, recordingResponse, recordingTranscription]);
 
   useEffect(() => {
     // Load on mount and when new messages are added
     loadHistory();
-  }, [lastResponse, lastTranscription, recordingResponse, recordingTranscription]);
 
-  // Track if user is manually scrolling
+    return () => {
+      if (loadHistoryTimeoutRef.current) {
+        clearTimeout(loadHistoryTimeoutRef.current);
+      }
+    };
+  }, [loadHistory]);
+
+  // Track if user is manually scrolling (for main container)
+  const mainScrollRef = useRef<HTMLDivElement>(null);
   const isUserScrollingRef = useRef(false);
   const scrollTimeoutRef = useRef<number | null>(null);
 
-  // Auto-scroll to bottom when history changes, but only if user is at bottom
+  // Auto-scroll to bottom when new messages arrive, but only if user is at bottom
   useEffect(() => {
-    if (historyScrollRef.current && conversationHistory.length > 0) {
+    if (mainScrollRef.current && (conversationHistory.length > 0 || lastResponse || lastTranscription || recordingResponse || recordingTranscription)) {
       // Small delay to ensure DOM is updated
       setTimeout(() => {
-        if (historyScrollRef.current && !isUserScrollingRef.current) {
-          const container = historyScrollRef.current;
-          const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 100;
+        if (mainScrollRef.current && !isUserScrollingRef.current) {
+          const container = mainScrollRef.current;
+          const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 150;
           
           // Only auto-scroll if user is near the bottom
           if (isNearBottom) {
@@ -119,13 +150,13 @@ export function WatchApp() {
         }
       }, 100);
     }
-  }, [conversationHistory]);
+  }, [conversationHistory, lastResponse, lastTranscription, recordingResponse, recordingTranscription]);
 
   // Handle scroll events to detect manual scrolling
   const handleScroll = () => {
-    if (historyScrollRef.current) {
-      const container = historyScrollRef.current;
-      const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 100;
+    if (mainScrollRef.current) {
+      const container = mainScrollRef.current;
+      const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 150;
       
       // User is scrolling manually
       isUserScrollingRef.current = !isNearBottom;
@@ -190,149 +221,150 @@ export function WatchApp() {
         </div>
       </header>
 
-      {/* Main Content */}
-      <main className={`flex-1 flex flex-col items-center gap-4 p-6 min-h-0 w-full overflow-hidden ${conversationHistory.length === 0 ? 'justify-center' : ''}`}>
-        {/* Current Session - Centered, No Scroll */}
-        <div className={`flex flex-col items-center gap-6 w-full ${conversationHistory.length === 0 ? 'justify-center' : 'flex-shrink-0'}`}>
-        {/* Voice Visualizer */}
-        <VoiceVisualizer
-          state={isRecordingAudio ? 'listening' : isProcessingAudio ? 'processing' : voiceState}
-          duration={isRecordingAudio ? recordingDuration : audioDuration}
-        />
+      {/* Main Content - Single Scrollable Container */}
+      <main 
+        ref={mainScrollRef}
+        onScroll={handleScroll}
+        className="flex-1 overflow-y-auto w-full"
+      >
+        <div className="flex flex-col items-center gap-6 p-6 pb-8 max-w-2xl mx-auto">
+          {/* Current Session Section */}
+          <div className="flex flex-col items-center gap-6 w-full">
+            {/* Voice Visualizer */}
+            <VoiceVisualizer
+              state={isRecordingAudio ? 'listening' : isProcessingAudio ? 'processing' : voiceState}
+              duration={isRecordingAudio ? recordingDuration : audioDuration}
+            />
 
-        {/* Transcription & Response Display */}
-        {(recordingTranscription || lastTranscription) && (
-          <div className="w-full max-w-md px-4">
-            <p className="text-xs text-muted-foreground mb-1">You said:</p>
-            <p className="text-sm text-foreground bg-muted/50 rounded-lg p-3 italic">
-              "{recordingTranscription || lastTranscription}"
-            </p>
-          </div>
-        )}
-        <ResponseCard
-          response={recordingResponse || lastResponse}
-          error={recordingError || lastError}
-        />
-
-        {/* Connection Controls */}
-        <div className="flex flex-col items-center gap-4">
-          {!isConnected ? (
-            <Button
-              size="lg"
-              onClick={scan}
-              disabled={isScanning}
-              className="min-w-[200px] gap-2"
-            >
-              {isScanning ? (
-                <>
-                  <Wifi className="h-5 w-5 animate-pulse" />
-                  Scanning...
-                </>
-              ) : (
-                <>
-                  <Bluetooth className="h-5 w-5" />
-                  Connect Watch
-                </>
-              )}
-            </Button>
-          ) : (
-            <Button
-              size="lg"
-              variant="secondary"
-              onClick={disconnect}
-              className="min-w-[200px] gap-2"
-            >
-              <BluetoothOff className="h-5 w-5" />
-              Disconnect
-            </Button>
-          )}
-
-          {/* Voice Recorder Button for Testing */}
-          <Button
-            size="lg"
-            variant={isRecordingAudio ? "destructive" : "outline"}
-            onClick={isRecordingAudio ? stopRecording : startRecording}
-            disabled={isProcessingAudio}
-            className="min-w-[200px] gap-2"
-          >
-            {isProcessingAudio ? (
-              <>
-                <Square className="h-5 w-5 animate-pulse" />
-                Processing...
-              </>
-            ) : isRecordingAudio ? (
-              <>
-                <Square className="h-5 w-5" />
-                Stop Recording ({recordingDuration.toFixed(1)}s)
-              </>
-            ) : (
-              <>
-                <Mic className="h-5 w-5" />
-                Test Voice Recording
-              </>
-            )}
-          </Button>
-
-          {/* Status Message */}
-          <p className="text-center text-sm text-muted-foreground max-w-xs">
-            {connectionState === 'disconnected' && (
-              'Tap to scan for your Hollow watch'
-            )}
-            {connectionState === 'scanning' && (
-              'Looking for Hollow 1W...'
-            )}
-            {connectionState === 'connecting' && (
-              'Establishing secure connection...'
-            )}
-            {connectionState === 'connected' && voiceState === 'idle' && (
-              'Connected. Speak into your watch to begin.'
-            )}
-            {voiceState === 'listening' && (
-              'Receiving audio from watch...'
-            )}
-            {voiceState === 'processing' && (
-              'Processing your voice command...'
-            )}
-            {voiceState === 'responding' && (
-              'Sending response to watch...'
-            )}
-          </p>
-
-        </div>
-        </div>
-
-        {/* Conversation History - Scrollable Container */}
-        {conversationHistory.length > 0 && (
-          <div className="w-full max-w-md flex-1 flex flex-col min-h-0 border-t border-border pt-4">
-            <div className="mb-3 px-4 flex-shrink-0 flex items-start justify-between gap-3">
-              <div className="flex-1 min-w-0">
-                <h2 className="text-sm font-semibold text-foreground">Conversation History</h2>
-                <p className="text-xs text-muted-foreground mt-1">
-                  {conversationHistory.length} message{conversationHistory.length !== 1 ? 's' : ''}
+            {/* Transcription & Response Display */}
+            {(recordingTranscription || lastTranscription) && (
+              <div className="w-full max-w-md px-4">
+                <p className="text-xs text-muted-foreground mb-1">You said:</p>
+                <p className="text-sm text-foreground bg-muted/50 rounded-lg p-3 italic">
+                  "{recordingTranscription || lastTranscription}"
                 </p>
               </div>
+            )}
+            <ResponseCard
+              response={recordingResponse || lastResponse}
+              error={recordingError || lastError}
+            />
+
+            {/* Connection Controls */}
+            <div className="flex flex-col items-center gap-4 w-full">
+              {!isConnected ? (
+                <Button
+                  size="lg"
+                  onClick={scan}
+                  disabled={isScanning}
+                  className="min-w-[200px] gap-2"
+                >
+                  {isScanning ? (
+                    <>
+                      <Wifi className="h-5 w-5 animate-pulse" />
+                      Scanning...
+                    </>
+                  ) : (
+                    <>
+                      <Bluetooth className="h-5 w-5" />
+                      Connect Watch
+                    </>
+                  )}
+                </Button>
+              ) : (
+                <Button
+                  size="lg"
+                  variant="secondary"
+                  onClick={disconnect}
+                  className="min-w-[200px] gap-2"
+                >
+                  <BluetoothOff className="h-5 w-5" />
+                  Disconnect
+                </Button>
+              )}
+
+              {/* Voice Recorder Button for Testing */}
               <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setIsClearAllDialogOpen(true)}
-                className="text-destructive border-destructive hover:text-destructive hover:bg-destructive/10 flex-shrink-0 whitespace-nowrap"
+                size="lg"
+                variant={isRecordingAudio ? "destructive" : "outline"}
+                onClick={isRecordingAudio ? stopRecording : startRecording}
+                disabled={isProcessingAudio}
+                className="min-w-[200px] gap-2"
               >
-                <Trash2 className="h-4 w-4 mr-1.5" />
-                Clear All
+                {isProcessingAudio ? (
+                  <>
+                    <Square className="h-5 w-5 animate-pulse" />
+                    Processing...
+                  </>
+                ) : isRecordingAudio ? (
+                  <>
+                    <Square className="h-5 w-5" />
+                    Stop Recording ({recordingDuration.toFixed(1)}s)
+                  </>
+                ) : (
+                  <>
+                    <Mic className="h-5 w-5" />
+                    Test Voice Recording
+                  </>
+                )}
               </Button>
-            </div>
-            <div 
-              ref={historyScrollRef}
-              onScroll={handleScroll}
-              className="flex-1 overflow-y-auto px-4 min-h-0"
-            >
-              <ConversationHistory 
-                messages={conversationHistory} 
-                onMessageDeleted={handleMessageDeleted}
-              />
+
+              {/* Status Message */}
+              <p className="text-center text-sm text-muted-foreground max-w-xs">
+                {connectionState === 'disconnected' && (
+                  'Tap to scan for your Hollow watch'
+                )}
+                {connectionState === 'scanning' && (
+                  'Looking for Hollow 1W...'
+                )}
+                {connectionState === 'connecting' && (
+                  'Establishing secure connection...'
+                )}
+                {connectionState === 'connected' && voiceState === 'idle' && (
+                  'Connected. Speak into your watch to begin.'
+                )}
+                {voiceState === 'listening' && (
+                  'Receiving audio from watch...'
+                )}
+                {voiceState === 'processing' && (
+                  'Processing your voice command...'
+                )}
+                {voiceState === 'responding' && (
+                  'Sending response to watch...'
+                )}
+              </p>
             </div>
           </div>
-        )}
+
+          {/* Conversation History Section - Visible while recording */}
+          {conversationHistory.length > 0 && (
+            <div className="w-full max-w-md border-t border-border pt-6 mt-4">
+              <div className="mb-4 px-4 flex items-start justify-between gap-3">
+                <div className="flex-1 min-w-0">
+                  <h2 className="text-sm font-semibold text-foreground">Conversation History</h2>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {conversationHistory.length} message{conversationHistory.length !== 1 ? 's' : ''}
+                  </p>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setIsClearAllDialogOpen(true)}
+                  className="text-destructive border-destructive hover:text-destructive hover:bg-destructive/10 flex-shrink-0 whitespace-nowrap"
+                >
+                  <Trash2 className="h-4 w-4 mr-1.5" />
+                  Clear All
+                </Button>
+              </div>
+              <div className="px-4">
+                <ConversationHistory 
+                  messages={conversationHistory} 
+                  onMessageDeleted={handleMessageDeleted}
+                />
+              </div>
+            </div>
+          )}
+        </div>
       </main>
 
       {/* Footer */}

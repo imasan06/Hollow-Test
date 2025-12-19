@@ -38,37 +38,71 @@ export async function getConversationHistory(): Promise<ConversationMessage[]> {
 }
 
 
+// Lock to prevent concurrent writes
+let isWriting = false;
+const writeQueue: Array<() => Promise<void>> = [];
+
+async function processWriteQueue(): Promise<void> {
+  if (isWriting || writeQueue.length === 0) {
+    return;
+  }
+
+  isWriting = true;
+  while (writeQueue.length > 0) {
+    const writeFn = writeQueue.shift();
+    if (writeFn) {
+      try {
+        await writeFn();
+      } catch (error) {
+        logger.error('Error in write queue', 'Storage', error instanceof Error ? error : new Error(String(error)));
+      }
+    }
+  }
+  isWriting = false;
+}
+
 export async function appendMessage(message: ConversationMessage): Promise<void> {
-  try {
-    const history = await getConversationHistory();
+  return new Promise((resolve, reject) => {
+    writeQueue.push(async () => {
+      try {
+        const history = await getConversationHistory();
 
-    const newMessage = {
-      role: message.role,
-      text: message.text.trim(),
-      timestamp: message.timestamp || Date.now(),
-    };
+        const newMessage = {
+          role: message.role,
+          text: message.text.trim(),
+          timestamp: message.timestamp || Date.now(),
+        };
 
-    history.push(newMessage);
+        // Check for duplicates by timestamp
+        const isDuplicate = history.some(
+          (msg) => msg.timestamp === newMessage.timestamp && msg.role === newMessage.role
+        );
 
-    const limitedHistory = history.slice(-MAX_CONVERSATION_TURNS);
+        if (isDuplicate) {
+          logger.debug(`Skipping duplicate message with timestamp ${newMessage.timestamp}`, 'Storage');
+          resolve();
+          return;
+        }
 
-    await Preferences.set({
-      key: CONVERSATION_STORAGE_KEY,
-      value: JSON.stringify(limitedHistory),
+        history.push(newMessage);
+
+        const limitedHistory = history.slice(-MAX_CONVERSATION_TURNS);
+
+        await Preferences.set({
+          key: CONVERSATION_STORAGE_KEY,
+          value: JSON.stringify(limitedHistory),
+        });
+
+        logger.debug(`Saved ${message.role} message: "${newMessage.text.substring(0, 50)}...". Total turns: ${limitedHistory.length}`, 'Storage');
+        resolve();
+      } catch (error) {
+        logger.error('Error saving message', 'Storage', error instanceof Error ? error : new Error(String(error)));
+        reject(error);
+      }
     });
 
-    logger.debug(`Saved ${message.role} message: "${newMessage.text.substring(0, 50)}...". Total turns: ${limitedHistory.length}`, 'Storage');
-
-    const verifyHistory = await getConversationHistory();
-    const lastMessage = verifyHistory[verifyHistory.length - 1];
-    if (lastMessage && lastMessage.text === newMessage.text && lastMessage.role === newMessage.role) {
-      logger.debug('Message verified in storage', 'Storage');
-    } else {
-      logger.warn('Message verification failed - message may not be saved correctly', 'Storage');
-    }
-  } catch (error) {
-    logger.error('Error saving message', 'Storage', error instanceof Error ? error : new Error(String(error)));
-  }
+    processWriteQueue();
+  });
 }
 
 
@@ -131,26 +165,16 @@ export async function formatConversationContext(excludeLastUserMessage?: boolean
   }
   
   const last12Pairs = messagesToFormat.slice(-24);
-  
-  logger.debug(`Formatting context from ${allMessages.length} total messages, taking last ${last12Pairs.length} messages`, 'Storage');
-
-  if (last12Pairs.length > 0) {
-    const lastMessage = last12Pairs[last12Pairs.length - 1];
-    logger.debug(`Last message in context: ${lastMessage.role} - "${lastMessage.text.substring(0, 50)}..." (timestamp: ${lastMessage.timestamp})`, 'Storage');
-  }
 
   const formatted = last12Pairs.map((msg) => {
     const roleLabel = msg.role === 'user' ? 'USER' : 'ASSISTANT';
     return `${roleLabel}: ${msg.text}`;
   }).join('\n\n');
 
-  logger.debug(`Formatted context: ${last12Pairs.length} messages (last 12 conversation pairs), ${formatted.length} chars`, 'Storage');
-  
-  if (formatted.length > 0) {
-    const preview = formatted.substring(0, 200);
-    logger.debug(`Context preview (first 200 chars): ${preview}...`, 'Storage');
-    const lastPart = formatted.substring(Math.max(0, formatted.length - 200));
-    logger.debug(`Context preview (last 200 chars): ...${lastPart}`, 'Storage');
+  // Only log detailed context info in development mode for performance
+  if (import.meta.env.DEV) {
+    logger.debug(`Formatting context from ${allMessages.length} total messages, taking last ${last12Pairs.length} messages`, 'Storage');
+    logger.debug(`Formatted context: ${last12Pairs.length} messages (last 12 conversation pairs), ${formatted.length} chars`, 'Storage');
   }
 
   return formatted;

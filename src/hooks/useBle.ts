@@ -134,18 +134,13 @@ export function useBle(): UseBleReturn {
         }
         logger.debug(`WAV validated: ${validation.sampleRate}Hz, ${validation.channels} channel(s)`, 'Hook');
 
-
-        const wavHeader = wavBase64.substring(0, 20);
-        logger.debug(`WAV header (base64): ${wavHeader}`, 'Hook');
-        if (!wavHeader.startsWith('UklGRi')) {
-          logger.warn("WAV header doesn't start with 'UklGRi' - format may be incorrect", 'Hook');
-        }
-
-
-        if (samples.length > 0) {
-          const maxSample = Math.max(...Array.from(samples).map(Math.abs));
-          const avgSample = Math.abs(Array.from(samples).reduce((a, b) => a + Math.abs(b), 0) / samples.length);
-          logger.debug(`Audio quality - Max: ${maxSample}, Avg: ${avgSample.toFixed(0)}`, 'Hook');
+        // Skip detailed audio quality checks in background for performance
+        // Only log if in development mode
+        if (import.meta.env.DEV && samples.length > 0) {
+          const wavHeader = wavBase64.substring(0, 20);
+          if (!wavHeader.startsWith('UklGRi')) {
+            logger.warn("WAV header doesn't start with 'UklGRi' - format may be incorrect", 'Hook');
+          }
         }
 
 
