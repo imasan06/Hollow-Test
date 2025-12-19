@@ -95,15 +95,8 @@ export function WatchApp() {
   };
 
   useEffect(() => {
-    // Load on mount
+    // Load on mount and when new messages are added
     loadHistory();
-    
-    // Reload when new messages are added (check every 2 seconds)
-    const interval = setInterval(() => {
-      loadHistory();
-    }, 2000);
-
-    return () => clearInterval(interval);
   }, [lastResponse, lastTranscription, recordingResponse, recordingTranscription]);
 
   // Track if user is manually scrolling
