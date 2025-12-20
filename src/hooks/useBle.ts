@@ -342,7 +342,18 @@ export function useBle(): UseBleReturn {
             break;
 
           case 'bleAudioData':
-            // Procesar audio recibido del servicio nativo (alta prioridad)
+            // OPTIMIZATION: Only process audio from BackgroundService when app is in BACKGROUND
+            // When app is in foreground, the Capacitor BluetoothLe plugin already handles audio
+            // via onAudioComplete callback - processing here would cause DUPLICATE requests
+            const isBackground = document.visibilityState === 'hidden';
+            
+            if (!isBackground) {
+              // App is in foreground - skip BackgroundService audio, let BluetoothLe plugin handle it
+              logger.debug('Skipping BackgroundService audio in foreground (BluetoothLe plugin handles it)', 'Hook');
+              break;
+            }
+            
+            // App is in background - process audio from BackgroundService
             if (eventData.data) {
               try {
                 // Convertir base64 a Uint8Array
