@@ -4,12 +4,11 @@ import { Capacitor, CapacitorHttp } from '@capacitor/core';
 import { Preferences } from '@capacitor/preferences';
 import { logger } from '@/utils/logger';
 
-const API_ENDPOINT = import.meta.env.VITE_API_ENDPOINT || 'https://hollow-backend.fly.dev';
+const API_ENDPOINT = import.meta.env.VITE_API_ENDPOINT || 'http://192.168.1.3:8080';
 const USER_ID_STORAGE_KEY = 'hollow_user_id';
 
-// Deepgram API for fast transcription
-const DEEPGRAM_API_KEY = import.meta.env.VITE_DEEPGRAM_API_KEY || '9b2b7ea0ddb6b4544d9df2cf3b4a72f4025d898d';
-const DEEPGRAM_API_URL = 'https://api.deepgram.com/v1/listen';
+// Deepgram transcription is now handled by the backend
+// API key and URL removed - backend handles Deepgram integration
 
 // OPTIMIZATION: Cache frequently accessed values to reduce Preferences calls (~50-100ms savings)
 let cachedUserId: string | null = null;
@@ -107,75 +106,6 @@ export function invalidateApiCache(): void {
   presetCacheTime = 0;
 }
 
-/**
- * Transcribe audio using Deepgram API (very fast, ~100-300ms)
- * @param audioBase64 - WAV audio encoded as base64
- * @returns Transcription text
- */
-export async function transcribeWithDeepgram(audioBase64: string): Promise<string> {
-  const startTime = performance.now();
-  
-  try {
-    logger.debug('Starting Deepgram transcription', 'API');
-    
-    // Convert base64 to binary
-    const binaryString = atob(audioBase64);
-    const bytes = new Uint8Array(binaryString.length);
-    for (let i = 0; i < binaryString.length; i++) {
-      bytes[i] = binaryString.charCodeAt(i);
-    }
-    
-    // Deepgram parameters for optimal speed
-    const params = new URLSearchParams({
-      model: 'nova-2',           // Fast and accurate model
-      language: 'en',            // English
-      punctuate: 'true',         // Add punctuation
-      smart_format: 'true',      // Smart formatting
-    });
-    
-    const url = `${DEEPGRAM_API_URL}?${params.toString()}`;
-    logger.debug(`Deepgram URL: ${url}`, 'API');
-    
-    // Use fetch for both web and native (CapacitorHttp has issues with binary data)
-    // Convert Uint8Array to Blob for proper binary transmission
-    const audioBlob = new Blob([bytes], { type: 'audio/wav' });
-    
-    const fetchResponse = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Token ${DEEPGRAM_API_KEY}`,
-        'Content-Type': 'audio/wav',
-      },
-      body: audioBlob,
-    });
-    
-    if (!fetchResponse.ok) {
-      const errorText = await fetchResponse.text();
-      logger.error(`Deepgram API error: ${fetchResponse.status}`, 'API', new Error(errorText));
-      throw new Error(`Deepgram error ${fetchResponse.status}: ${errorText}`);
-    }
-    
-    const data = await fetchResponse.json();
-    logger.debug(`Deepgram response: ${JSON.stringify(data).substring(0, 200)}...`, 'API');
-    
-    const transcript = data?.results?.channels?.[0]?.alternatives?.[0]?.transcript || '';
-    
-    const elapsed = performance.now() - startTime;
-    logger.info(`[TIMING] Deepgram transcription: ${elapsed.toFixed(2)}ms`, 'API');
-    
-    if (!transcript) {
-      logger.warn('Deepgram returned empty transcript', 'API');
-    }
-    
-    return transcript;
-  } catch (error) {
-    const elapsed = performance.now() - startTime;
-    logger.error(`Deepgram transcription failed after ${elapsed.toFixed(2)}ms`, 'API', 
-      error instanceof Error ? error : new Error(String(error)));
-    throw error;
-  }
-}
-
 // Track in-flight requests to prevent duplicates
 const inFlightRequests = new Map<string, Promise<TranscribeResponse>>();
 
@@ -209,25 +139,11 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
 
       logger.debug(`Using persona preset: "${activePreset.name}"`, 'API');
 
-    let transcript = '';
-    let localTranscription = '';
-
-    if (request.audio) {
-      logger.debug('Audio provided, sending to Deepgram for fast transcription', 'API');
-
-      // Use Deepgram for fast transcription (~100-300ms vs ~500-1000ms)
-      transcript = await transcribeWithDeepgram(request.audio);
-      localTranscription = transcript;
-      
-      if (!transcript) {
-        logger.warn('Deepgram returned empty transcript', 'API');
-      } else {
-        logger.debug(`Deepgram transcription: "${transcript}"`, 'API');
-      }
-    } else if (request.text) {
-      transcript = request.text.trim();
-      logger.debug('Using provided text as transcript', 'API');
-    } else {
+    // Determine if we're sending audio or text
+    const hasAudio = !!request.audio;
+    const hasText = !!request.text;
+    
+    if (!hasAudio && !hasText) {
       throw new Error('Either audio or text must be provided');
     }
 
@@ -241,6 +157,8 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
     // Check if in background for performance optimizations
     const isBackground = typeof document !== 'undefined' && (document.visibilityState === 'hidden' || !document.hasFocus());
     
+    // OPTIMIZATION: Only fetch context if not provided
+    // Context is often pre-fetched in parallel by callers for better performance
     let conversationContext = request.context;
     if (!conversationContext) {
       // Exclude last user message to avoid duplication with current transcript
@@ -256,12 +174,22 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
       }
     }
 
+    // Build backend payload - send audio directly to backend for transcription
     const backendPayload: any = {
       user_id: user_id,
-      transcript: transcript,
       persona: persona,
       rules: rules,
     };
+
+    if (hasAudio) {
+      // Send audio to backend - backend will transcribe with Deepgram
+      logger.debug('Sending audio to backend for transcription', 'API');
+      backendPayload.audio = request.audio;
+    } else if (hasText) {
+      // Send text directly
+      backendPayload.transcript = request.text.trim();
+      logger.debug('Using provided text as transcript', 'API');
+    }
 
     if (conversationContext && conversationContext.trim().length > 0) {
       backendPayload.context = conversationContext;
@@ -320,10 +248,12 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
           : nativeResponse.data;
 
         const answer = data.reply ?? data.answer ?? data.text ?? data.response ?? '';
+        // Backend may return transcription if audio was sent
+        const transcription = data.transcription ?? data.transcript ?? (hasText ? request.text : '');
 
         const normalizedData: TranscribeResponse = {
           text: answer,
-          transcription: localTranscription,
+          transcription: transcription,
           error: data.error,
         };
 
@@ -371,10 +301,12 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
     logger.info(`[TIMING] Chat HTTP request: ${chatRequestTime.toFixed(2)}ms`, 'API');
 
     const answer = data.reply ?? data.answer ?? data.text ?? data.response ?? '';
+    // Backend may return transcription if audio was sent
+    const transcription = data.transcription ?? data.transcript ?? (hasText ? request.text : '');
 
     const normalizedData: TranscribeResponse = {
       text: answer,
-      transcription: localTranscription,
+      transcription: transcription,
       error: data.error,
     };
 

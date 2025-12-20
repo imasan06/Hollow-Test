@@ -191,50 +191,40 @@ export function useBle(): UseBleReturn {
             return;
           }
 
-          // OPTIMIZATION: Pre-fetch context in parallel with transcription API call
-          // This saves ~50-100ms by not waiting for transcription to complete first
-          const contextStart = performance.now();
-          const contextPromise = formatConversationContext(true);
-
-          // TIMING: Transcription API call (runs in parallel with context fetch)
-          const transcriptionStart = performance.now();
-          const transcriptionResult = await sendTranscription({ audio: wavBase64 });
-          timing.transcription = performance.now() - transcriptionStart;
+          // TIMING: Single API call - backend handles transcription and chat
+          const apiStart = performance.now();
           
-          if (!transcriptionResult.transcription) {
-            throw new Error('No transcription received');
-          }
-
-          // Now await the context that was fetching in parallel
-          const conversationContext = await contextPromise;
-          timing.contextFetch = performance.now() - contextStart;
+          // Get conversation context before sending
+          const conversationContext = await formatConversationContext(true);
+          timing.contextFetch = performance.now() - apiStart;
           
-          logger.info(`[TIMING] Transcription API: ${timing.transcription.toFixed(2)}ms`, 'Hook');
-          logger.info(`[TIMING] Context fetch (parallel): ${timing.contextFetch.toFixed(2)}ms`, 'Hook');
-
-          // OPTIMIZATION: Update state and save message in parallel with chat request
-          // This avoids blocking the chat API call
-          setLastTranscription(transcriptionResult.transcription);
-          
-          // Start message save (fire-and-forget, don't await)
-          const messageSavePromise = appendMessage({
-            role: 'user',
-            text: transcriptionResult.transcription,
-            timestamp: Date.now(),
-          });
-
-          // TIMING: Chat API call (runs in parallel with message save)
-          const chatStart = performance.now();
+          // Send audio to backend - backend will transcribe with Deepgram and get AI response
+          const apiCallStart = performance.now();
           apiResponse = await sendTranscription({ 
-            text: transcriptionResult.transcription,
+            audio: wavBase64,
             context: conversationContext || undefined,
           });
-          timing.chatRequest = performance.now() - chatStart;
+          timing.transcription = performance.now() - apiCallStart;
+          timing.chatRequest = timing.transcription; // Combined call now
           
-          // Await message save to complete (should be done by now)
-          await messageSavePromise;
+          if (!apiResponse.transcription) {
+            throw new Error('Backend did not return transcription');
+          }
+
+          logger.info(`[TIMING] Context fetch: ${timing.contextFetch.toFixed(2)}ms`, 'Hook');
+          logger.info(`[TIMING] Backend API (transcription + chat): ${timing.transcription.toFixed(2)}ms`, 'Hook');
+
+          // Update state with transcription from backend
+          setLastTranscription(apiResponse.transcription);
           
-          logger.info(`[TIMING] Chat API request: ${timing.chatRequest.toFixed(2)}ms`, 'Hook');
+          // Save user message to conversation store
+          await appendMessage({
+            role: 'user',
+            text: apiResponse.transcription,
+            timestamp: Date.now(),
+          });
+          
+          logger.debug('User message saved to conversation history', 'Hook');
         }
 
 

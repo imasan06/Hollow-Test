@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback } from 'react';
 import { encodeWavBase64, getAudioDuration, validateWavFormat } from '@/audio/wavEncoder';
-import { sendTranscription, transcribeWithDeepgram } from '@/api';
+import { sendTranscription } from '@/api';
 import { appendMessage, formatConversationContext } from '@/storage/conversationStore';
 import { logger } from '@/utils/logger';
 import { APP_CONFIG } from '@/config/app.config';
@@ -209,19 +209,32 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
       const wavBase64 = await convertBlobToWav(audioBlob);
       recordedAudioRef.current = wavBase64;
 
-      logger.debug('Sending audio to Deepgram for fast transcription...', 'AudioRecorder');
+      logger.debug('Sending audio to backend for transcription and chat...', 'AudioRecorder');
 
-      // Step 1: Transcribe audio using Deepgram (very fast, ~100-300ms)
-      const transcription = await transcribeWithDeepgram(wavBase64);
+      // Step 1: Get conversation context BEFORE sending (to include in request)
+      const context = await formatConversationContext();
+      logger.debug(`Context for AI request: ${context ? `${context.length} chars` : 'empty'}`, 'AudioRecorder');
 
-      if (!transcription) {
-        throw new Error('Deepgram transcription returned empty result');
-      }
+      // Step 2: Send audio to backend - backend will transcribe with Deepgram and get AI response
+      const chatResponse = await sendTranscription({
+        audio: wavBase64,
+        context: context || undefined,
+      });
 
-      setLastTranscription(transcription);
-      logger.debug(`Deepgram transcription: ${transcription}`, 'AudioRecorder');
+        if (chatResponse.error) {
+          throw new Error(chatResponse.error);
+        }
 
-        // Step 2: Save user message to conversation store
+        // Get transcription from response (backend transcribed the audio)
+        const transcription = chatResponse.transcription || '';
+        if (!transcription) {
+          throw new Error('Backend did not return transcription');
+        }
+
+        setLastTranscription(transcription);
+        logger.debug(`Backend transcription: ${transcription}`, 'AudioRecorder');
+
+        // Step 3: Save user message to conversation store
         await appendMessage({
           role: 'user',
           text: transcription,
@@ -229,27 +242,10 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
         });
         logger.debug('User message saved to conversation history', 'AudioRecorder');
 
-        // Small delay to ensure persistence
-        await new Promise((resolve) => setTimeout(resolve, 50));
-
-        // Step 3: Get conversation context AFTER saving the user message
-        const context = await formatConversationContext();
-        logger.debug(`Context for AI request: ${context ? `${context.length} chars` : 'empty'}`, 'AudioRecorder');
-
-        // Step 4: Send to chat with context
-        const chatResponse = await sendTranscription({
-          text: transcription,
-          context: context || undefined,
-        });
-
-        if (chatResponse.error) {
-          throw new Error(chatResponse.error);
-        }
-
         const aiResponse = chatResponse.text || '';
         setLastResponse(aiResponse);
 
-        // Step 5: Save AI response to conversation store
+        // Step 4: Save AI response to conversation store
         if (aiResponse) {
           await appendMessage({
             role: 'assistant',
