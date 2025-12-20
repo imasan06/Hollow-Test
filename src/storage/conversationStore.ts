@@ -3,6 +3,9 @@ import { logger } from '@/utils/logger';
 
 const CONVERSATION_STORAGE_KEY = 'conversation_history';
 const MAX_CONVERSATION_TURNS = 24;
+// OPTIMIZATION: Limit context sent to API for faster responses
+const MAX_CONTEXT_TURNS = 12; // Send only last 12 messages (6 pairs) to API
+const MAX_CONTEXT_CHARS = 3000; // Limit context to ~3000 chars for faster API response
 
 export interface ConversationMessage {
   role: 'user' | 'assistant';
@@ -145,13 +148,10 @@ export async function deleteMessage(timestamp: number): Promise<boolean> {
 
 
 export async function formatConversationContext(excludeLastUserMessage?: boolean): Promise<string> {
-  const allMessages = await getLastTurns(MAX_CONVERSATION_TURNS);
+  // OPTIMIZATION: Only fetch what we need for context (not full history)
+  const allMessages = await getLastTurns(MAX_CONTEXT_TURNS);
 
   if (allMessages.length === 0) {
-    // Only log in dev mode
-    if (import.meta.env.DEV) {
-      logger.debug('No conversation history to format', 'Storage');
-    }
     return '';
   }
 
@@ -163,24 +163,26 @@ export async function formatConversationContext(excludeLastUserMessage?: boolean
     const lastMessage = sortedMessages[sortedMessages.length - 1];
     if (lastMessage.role === 'user') {
       messagesToFormat = sortedMessages.slice(0, -1);
-      // Only log in dev mode
-      if (import.meta.env.DEV) {
-        logger.debug(`Excluding last user message from context to avoid duplication`, 'Storage');
-      }
     }
   }
   
-  const last12Pairs = messagesToFormat.slice(-24);
+  // OPTIMIZATION: Take only last MAX_CONTEXT_TURNS messages for API
+  const contextMessages = messagesToFormat.slice(-MAX_CONTEXT_TURNS);
 
-  const formatted = last12Pairs.map((msg) => {
+  let formatted = contextMessages.map((msg) => {
     const roleLabel = msg.role === 'user' ? 'USER' : 'ASSISTANT';
     return `${roleLabel}: ${msg.text}`;
   }).join('\n\n');
 
-  // Only log detailed context info in development mode for performance
-  if (import.meta.env.DEV) {
-    logger.debug(`Formatting context from ${allMessages.length} total messages, taking last ${last12Pairs.length} messages`, 'Storage');
-    logger.debug(`Formatted context: ${last12Pairs.length} messages (last 12 conversation pairs), ${formatted.length} chars`, 'Storage');
+  // OPTIMIZATION: Truncate context if too long (reduces API payload size)
+  if (formatted.length > MAX_CONTEXT_CHARS) {
+    // Find a good break point near the limit
+    const truncateAt = formatted.lastIndexOf('\n\n', MAX_CONTEXT_CHARS);
+    if (truncateAt > MAX_CONTEXT_CHARS / 2) {
+      formatted = formatted.substring(truncateAt + 2); // Keep more recent messages
+    } else {
+      formatted = formatted.substring(formatted.length - MAX_CONTEXT_CHARS);
+    }
   }
 
   return formatted;

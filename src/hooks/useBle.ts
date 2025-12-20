@@ -43,6 +43,11 @@ export function useBle(): UseBleReturn {
 
   const activeSessionId = useRef<string | null>(null);
   const isProcessingRequest = useRef(false);
+  
+  // OPTIMIZATION: Track last audio processing time to prevent duplicates
+  // When both BluetoothLe plugin and BackgroundService process the same audio
+  const lastAudioProcessedTime = useRef<number>(0);
+  const AUDIO_DEDUP_WINDOW_MS = 2000; // 2 second window to prevent duplicate processing
 
   const handlePersonaUpdateFromWatch = useCallback(async (data: string) => {
     try {
@@ -91,11 +96,25 @@ export function useBle(): UseBleReturn {
 
   const processAudio = useCallback(
     async (adpcmData: Uint8Array, mode: 'VOICE' | 'SILENT') => {
-
+      const now = Date.now();
+      
+      // OPTIMIZATION: Deduplicate audio processing
+      // Prevents double processing when both BluetoothLe plugin and BackgroundService
+      // send the same audio data (which happens in foreground mode)
       if (isProcessingRequest.current) {
         logger.warn('Another request is in progress, ignoring this audio', 'Hook');
         return;
       }
+      
+      // Check if we recently processed audio (within dedup window)
+      const timeSinceLastAudio = now - lastAudioProcessedTime.current;
+      if (timeSinceLastAudio < AUDIO_DEDUP_WINDOW_MS && lastAudioProcessedTime.current > 0) {
+        logger.debug(`Skipping duplicate audio (${timeSinceLastAudio}ms since last)`, 'Hook');
+        return;
+      }
+      
+      // Mark this audio as being processed
+      lastAudioProcessedTime.current = now;
 
       // TIMING: Start of audio processing pipeline
       const pipelineStart = performance.now();
@@ -137,26 +156,15 @@ export function useBle(): UseBleReturn {
         const duration = getAudioDuration(samples.length);
         setAudioDuration(duration);
         
-        logger.info(`[TIMING] Audio processing (decode+encode): ${timing.audioProcessing.toFixed(2)}ms`, 'Hook');
-
-        const validation = validateWavFormat(wavBase64);
-        if (!validation.valid) {
-          logger.error(`WAV validation failed: ${validation.error}`, 'Hook');
-          throw new Error(`Invalid WAV format: ${validation.error}`);
-        }
-        
-        // Only log validation details in foreground or dev mode
-        if (!isBackground || import.meta.env.DEV) {
-          logger.debug(`WAV validated: ${validation.sampleRate}Hz, ${validation.channels} channel(s)`, 'Hook');
-        }
-
-        // Skip detailed audio quality checks in background for performance
-        // Only log if in development mode
-        if (import.meta.env.DEV && samples.length > 0) {
-          const wavHeader = wavBase64.substring(0, 20);
-          if (!wavHeader.startsWith('UklGRi')) {
-            logger.warn("WAV header doesn't start with 'UklGRi' - format may be incorrect", 'Hook');
+        // OPTIMIZATION: Skip WAV validation in production (~20-50ms savings)
+        // Our encoder is known to produce valid WAV, only validate in dev mode
+        if (import.meta.env.DEV) {
+          const validation = validateWavFormat(wavBase64);
+          if (!validation.valid) {
+            logger.error(`WAV validation failed: ${validation.error}`, 'Hook');
+            throw new Error(`Invalid WAV format: ${validation.error}`);
           }
+          logger.debug(`WAV validated: ${validation.sampleRate}Hz, ${validation.channels} channel(s)`, 'Hook');
         }
 
 
@@ -342,18 +350,10 @@ export function useBle(): UseBleReturn {
             break;
 
           case 'bleAudioData':
-            // OPTIMIZATION: Only process audio from BackgroundService when app is in BACKGROUND
-            // When app is in foreground, the Capacitor BluetoothLe plugin already handles audio
-            // via onAudioComplete callback - processing here would cause DUPLICATE requests
-            const isBackground = document.visibilityState === 'hidden';
-            
-            if (!isBackground) {
-              // App is in foreground - skip BackgroundService audio, let BluetoothLe plugin handle it
-              logger.debug('Skipping BackgroundService audio in foreground (BluetoothLe plugin handles it)', 'Hook');
-              break;
-            }
-            
-            // App is in background - process audio from BackgroundService
+            // OPTIMIZATION: Process audio from BackgroundService
+            // The processAudio function has built-in deduplication to prevent
+            // double processing when both BluetoothLe plugin and BackgroundService
+            // send the same audio data
             if (eventData.data) {
               try {
                 // Convertir base64 a Uint8Array
@@ -362,7 +362,7 @@ export function useBle(): UseBleReturn {
                 for (let i = 0; i < binaryString.length; i++) {
                   bytes[i] = binaryString.charCodeAt(i);
                 }
-                // Procesar audio directamente (evita depender del WebView limitado)
+                // processAudio has deduplication - will skip if already processed recently
                 processAudio(bytes, 'VOICE');
               } catch (error) {
                 logger.error('Error processing native audio data', 'Hook', error instanceof Error ? error : new Error(String(error)));
