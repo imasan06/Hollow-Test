@@ -275,6 +275,15 @@ export function useBle(): UseBleReturn {
           operations.push(
             bleManager.sendAiText(apiResponse.text).then(() => {
               timing.bleSend = performance.now() - bleStart;
+            }).catch((error) => {
+              // Log error but don't fail the whole operation if device disconnected
+              timing.bleSend = performance.now() - bleStart;
+              const errorMsg = error instanceof Error ? error.message : String(error);
+              if (errorMsg.includes('Not connected') || errorMsg.includes('disconnect') || errorMsg.includes('failed')) {
+                logger.warn('Failed to send response to watch (device may have disconnected)', 'Hook');
+              } else {
+                logger.error('Failed to send response to watch', 'Hook', error instanceof Error ? error : new Error(String(error)));
+              }
             })
           );
         }

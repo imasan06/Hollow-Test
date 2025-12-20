@@ -146,6 +146,12 @@ public class BleConnectionManager {
                 return false;
             }
             
+            // Double-check connection state right before write (connection may have dropped)
+            if (!isConnected() || bluetoothGatt == null) {
+                Log.w(TAG, "Cannot send data - connection lost before write");
+                return false;
+            }
+            
             characteristic.setValue(data);
             boolean success = bluetoothGatt.writeCharacteristic(characteristic);
             

@@ -303,6 +303,13 @@ class BleManager {
     }
 
     if (!this.device) {
+      logger.warn('Cannot send text - device not connected', 'BLE');
+      throw new Error('Not connected to device');
+    }
+
+    // Double-check connection state before attempting to write
+    if (!this.isConnected()) {
+      logger.warn('Cannot send text - connection check failed', 'BLE');
       throw new Error('Not connected to device');
     }
 
@@ -364,8 +371,14 @@ class BleManager {
         throw fragError;
       }
     } catch (error) {
-      logger.error('Failed to send AI text', 'BLE', error instanceof Error ? error : new Error(String(error)));
-      this.callbacks?.onError?.('Failed to send response to watch');
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      // Don't show error to user if device disconnected - this is expected in some scenarios
+      if (errorMsg.includes('Not connected') || errorMsg.includes('disconnect') || errorMsg.includes('failed')) {
+        logger.warn(`Failed to send AI text (device may have disconnected): ${errorMsg}`, 'BLE');
+      } else {
+        logger.error('Failed to send AI text', 'BLE', error instanceof Error ? error : new Error(String(error)));
+        this.callbacks?.onError?.('Failed to send response to watch');
+      }
       throw error;
     }
   }
