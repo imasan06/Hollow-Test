@@ -7,6 +7,10 @@ import { logger } from '@/utils/logger';
 const API_ENDPOINT = import.meta.env.VITE_API_ENDPOINT || 'https://hollow-backend.fly.dev';
 const USER_ID_STORAGE_KEY = 'hollow_user_id';
 
+// Deepgram API for fast transcription
+const DEEPGRAM_API_KEY = import.meta.env.VITE_DEEPGRAM_API_KEY || '9b2b7ea0ddb6b4544d9df2cf3b4a72f4025d898d';
+const DEEPGRAM_API_URL = 'https://api.deepgram.com/v1/listen';
+
 // OPTIMIZATION: Cache frequently accessed values to reduce Preferences calls (~50-100ms savings)
 let cachedUserId: string | null = null;
 let cachedBackendToken: string | null = null;
@@ -103,6 +107,75 @@ export function invalidateApiCache(): void {
   presetCacheTime = 0;
 }
 
+/**
+ * Transcribe audio using Deepgram API (very fast, ~100-300ms)
+ * @param audioBase64 - WAV audio encoded as base64
+ * @returns Transcription text
+ */
+export async function transcribeWithDeepgram(audioBase64: string): Promise<string> {
+  const startTime = performance.now();
+  
+  try {
+    logger.debug('Starting Deepgram transcription', 'API');
+    
+    // Convert base64 to binary
+    const binaryString = atob(audioBase64);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+    
+    // Deepgram parameters for optimal speed
+    const params = new URLSearchParams({
+      model: 'nova-2',           // Fast and accurate model
+      language: 'en',            // English
+      punctuate: 'true',         // Add punctuation
+      smart_format: 'true',      // Smart formatting
+    });
+    
+    const url = `${DEEPGRAM_API_URL}?${params.toString()}`;
+    logger.debug(`Deepgram URL: ${url}`, 'API');
+    
+    // Use fetch for both web and native (CapacitorHttp has issues with binary data)
+    // Convert Uint8Array to Blob for proper binary transmission
+    const audioBlob = new Blob([bytes], { type: 'audio/wav' });
+    
+    const fetchResponse = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Token ${DEEPGRAM_API_KEY}`,
+        'Content-Type': 'audio/wav',
+      },
+      body: audioBlob,
+    });
+    
+    if (!fetchResponse.ok) {
+      const errorText = await fetchResponse.text();
+      logger.error(`Deepgram API error: ${fetchResponse.status}`, 'API', new Error(errorText));
+      throw new Error(`Deepgram error ${fetchResponse.status}: ${errorText}`);
+    }
+    
+    const data = await fetchResponse.json();
+    logger.debug(`Deepgram response: ${JSON.stringify(data).substring(0, 200)}...`, 'API');
+    
+    const transcript = data?.results?.channels?.[0]?.alternatives?.[0]?.transcript || '';
+    
+    const elapsed = performance.now() - startTime;
+    logger.info(`[TIMING] Deepgram transcription: ${elapsed.toFixed(2)}ms`, 'API');
+    
+    if (!transcript) {
+      logger.warn('Deepgram returned empty transcript', 'API');
+    }
+    
+    return transcript;
+  } catch (error) {
+    const elapsed = performance.now() - startTime;
+    logger.error(`Deepgram transcription failed after ${elapsed.toFixed(2)}ms`, 'API', 
+      error instanceof Error ? error : new Error(String(error)));
+    throw error;
+  }
+}
+
 // Track in-flight requests to prevent duplicates
 const inFlightRequests = new Map<string, Promise<TranscribeResponse>>();
 
@@ -140,83 +213,16 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
     let localTranscription = '';
 
     if (request.audio) {
-      logger.debug('Audio provided, sending to backend for transcription', 'API');
+      logger.debug('Audio provided, sending to Deepgram for fast transcription', 'API');
 
-      const backendToken = getBackendSharedToken();
-      if (!backendToken) {
-        throw new Error('Backend token not available');
-      }
-
-      const transcribeUrl = `${API_ENDPOINT}/transcribe/base64`;
-      const isNative = Capacitor.isNativePlatform();
-
-      // Check if app is in background for optimized timeouts
-      const isBackground = document.visibilityState === 'hidden' || (typeof window !== 'undefined' && !document.hasFocus());
-      const connectTimeout = isBackground ? 15000 : 30000; // 15s in background, 30s in foreground
-      const readTimeout = isBackground ? 45000 : 60000; // 45s in background, 60s in foreground
-
-      const audioPayload = {
-        audio: request.audio,
-        ...(user_id && { user_id }),
-      };
-
-      // TIMING: Transcription API request
-      const transcribeRequestStart = performance.now();
-      let transcribeResponse;
-      if (isNative) {
-        transcribeResponse = await CapacitorHttp.request({
-          method: 'POST',
-          url: transcribeUrl,
-          headers: {
-            'Content-Type': 'application/json',
-            'X-User-Token': backendToken,
-          },
-          data: audioPayload,
-          connectTimeout,
-          readTimeout,
-        });
+      // Use Deepgram for fast transcription (~100-300ms vs ~500-1000ms)
+      transcript = await transcribeWithDeepgram(request.audio);
+      localTranscription = transcript;
+      
+      if (!transcript) {
+        logger.warn('Deepgram returned empty transcript', 'API');
       } else {
-        const response = await fetch(transcribeUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-User-Token': backendToken,
-          },
-          body: JSON.stringify(audioPayload),
-        });
-
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-
-        transcribeResponse = {
-          status: response.status,
-          data: await response.json(),
-        };
-      }
-      const transcribeRequestTime = performance.now() - transcribeRequestStart;
-      logger.info(`[TIMING] Transcription HTTP request: ${transcribeRequestTime.toFixed(2)}ms`, 'API');
-
-      if (transcribeResponse.status >= 200 && transcribeResponse.status < 300) {
-        const data = typeof transcribeResponse.data === 'string'
-          ? JSON.parse(transcribeResponse.data)
-          : transcribeResponse.data;
-
-        const backendTranscript = data.transcript || data.text || data.transcription || data.result || '';
-
-        if (backendTranscript) {
-          transcript = backendTranscript;
-          localTranscription = backendTranscript;
-          logger.debug('Backend transcription successful', 'API');
-        } else {
-          throw new Error('Backend /transcribe/base64 returned empty transcript');
-        }
-      } else {
-        const errorData = typeof transcribeResponse.data === 'string'
-          ? JSON.parse(transcribeResponse.data)
-          : transcribeResponse.data;
-        logger.error(`Backend transcription failed: ${transcribeResponse.status}`, 'API', new Error(JSON.stringify(errorData)));
-        throw new Error(`Backend /transcribe/base64 returned status ${transcribeResponse.status}: ${JSON.stringify(errorData)}`);
+        logger.debug(`Deepgram transcription: "${transcript}"`, 'API');
       }
     } else if (request.text) {
       transcript = request.text.trim();

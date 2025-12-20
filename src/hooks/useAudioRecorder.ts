@@ -1,7 +1,6 @@
 import { useState, useRef, useCallback } from 'react';
-import { Capacitor, CapacitorHttp } from '@capacitor/core';
 import { encodeWavBase64, getAudioDuration, validateWavFormat } from '@/audio/wavEncoder';
-import { sendTranscription } from '@/api';
+import { sendTranscription, transcribeWithDeepgram } from '@/api';
 import { appendMessage, formatConversationContext } from '@/storage/conversationStore';
 import { logger } from '@/utils/logger';
 import { APP_CONFIG } from '@/config/app.config';
@@ -210,71 +209,17 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
       const wavBase64 = await convertBlobToWav(audioBlob);
       recordedAudioRef.current = wavBase64;
 
-      logger.debug('Sending audio for transcription...', 'AudioRecorder');
+      logger.debug('Sending audio to Deepgram for fast transcription...', 'AudioRecorder');
 
-      // First, transcribe the audio (this will only transcribe, not send to chat)
-      // We need to call the transcription endpoint directly, then send to chat with context
-      const API_ENDPOINT = import.meta.env.VITE_API_ENDPOINT || 'https://hollow-backend.fly.dev';
-      const backendToken = import.meta.env.VITE_BACKEND_SHARED_TOKEN;
-      
-      if (!backendToken) {
-        throw new Error('Backend token not available');
+      // Step 1: Transcribe audio using Deepgram (very fast, ~100-300ms)
+      const transcription = await transcribeWithDeepgram(wavBase64);
+
+      if (!transcription) {
+        throw new Error('Deepgram transcription returned empty result');
       }
 
-      // Step 1: Transcribe audio
-      const transcribeUrl = `${API_ENDPOINT}/transcribe/base64`;
-      const isNative = Capacitor.isNativePlatform();
-
-      const audioPayload = {
-        audio: wavBase64,
-      };
-
-      let transcribeResponse;
-      if (isNative) {
-        transcribeResponse = await CapacitorHttp.request({
-          method: 'POST',
-          url: transcribeUrl,
-          headers: {
-            'Content-Type': 'application/json',
-            'X-User-Token': backendToken,
-          },
-          data: audioPayload,
-          connectTimeout: 30000,
-          readTimeout: 60000,
-        });
-      } else {
-        const response = await fetch(transcribeUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-User-Token': backendToken,
-          },
-          body: JSON.stringify(audioPayload),
-        });
-
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-
-        transcribeResponse = {
-          status: response.status,
-          data: await response.json(),
-        };
-      }
-
-      if (transcribeResponse.status >= 200 && transcribeResponse.status < 300) {
-        const data = typeof transcribeResponse.data === 'string'
-          ? JSON.parse(transcribeResponse.data)
-          : transcribeResponse.data;
-
-        const transcription = data.transcript || data.text || data.transcription || '';
-
-        if (!transcription) {
-          throw new Error('Transcription returned empty result');
-        }
-
-        setLastTranscription(transcription);
-        logger.debug(`Transcription: ${transcription}`, 'AudioRecorder');
+      setLastTranscription(transcription);
+      logger.debug(`Deepgram transcription: ${transcription}`, 'AudioRecorder');
 
         // Step 2: Save user message to conversation store
         await appendMessage({
@@ -319,13 +264,6 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
           title: 'Transcription Complete',
           description: 'Audio processed successfully',
         });
-      } else {
-        const errorData = typeof transcribeResponse.data === 'string'
-          ? JSON.parse(transcribeResponse.data)
-          : transcribeResponse.data;
-        logger.error(`Transcription failed: ${transcribeResponse.status}`, 'AudioRecorder', new Error(JSON.stringify(errorData)));
-        throw new Error(`Transcription failed: ${transcribeResponse.status} - ${JSON.stringify(errorData)}`);
-      }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to process audio';
       logger.error('Failed to process recorded audio', 'AudioRecorder', err instanceof Error ? err : new Error(String(err)));

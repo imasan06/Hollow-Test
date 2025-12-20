@@ -73,3 +73,5 @@ export function waitForBleReady(): Promise<void> {
 
 // Iniciar pre-inicialización inmediatamente al importar este módulo
 preInitializeBle();
+
+
