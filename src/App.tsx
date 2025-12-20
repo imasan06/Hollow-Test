@@ -16,21 +16,15 @@ const queryClient = new QueryClient();
 
 const AppComponent = () => {
   useEffect(() => {
-    let timerId: ReturnType<typeof setTimeout> | null = null;
-    
-    // OPTIMIZACIÓN: Iniciar Foreground Service de forma diferida para no bloquear el render
+    // Start Foreground Service on app startup (Android only) - sin delay
     if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android') {
-      // Usar setTimeout(0) para diferir al siguiente tick del event loop
-      // Esto permite que React renderice la UI primero
-      timerId = setTimeout(() => {
-        backgroundService.enable()
-          .then(() => {
-            logger.info('Foreground Service started successfully', 'App');
-          })
-          .catch((error) => {
-            logger.error('Error starting Foreground Service on app startup', 'App', error instanceof Error ? error : new Error(String(error)));
-          });
-      }, 0);
+      backgroundService.enable()
+        .then(() => {
+          logger.info('Foreground Service started successfully', 'App');
+        })
+        .catch((error) => {
+          logger.error('Error starting Foreground Service on app startup', 'App', error instanceof Error ? error : new Error(String(error)));
+        });
     }
 
     // Listener for app background/foreground state changes
@@ -58,14 +52,9 @@ const AppComponent = () => {
       App.addListener('appStateChange', handleAppStateChange);
 
       return () => {
-        if (timerId) clearTimeout(timerId);
         App.removeAllListeners();
       };
     }
-    
-    return () => {
-      if (timerId) clearTimeout(timerId);
-    };
   }, []);
 
   return (

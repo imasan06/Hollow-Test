@@ -121,29 +121,12 @@ export function WatchApp() {
   }, [lastResponse, lastTranscription, recordingResponse, recordingTranscription]);
 
   useEffect(() => {
-    // Diferir carga de historial para no bloquear el render inicial
-    // Usar requestIdleCallback si está disponible, sino setTimeout
-    const loadDeferred = () => {
-      loadHistory();
-    };
-
-    let handle: number | ReturnType<typeof setTimeout>;
-    
-    if ('requestIdleCallback' in window) {
-      handle = (window as any).requestIdleCallback(loadDeferred, { timeout: 500 });
-    } else {
-      // Fallback: cargar después de 100ms para permitir render inicial
-      handle = setTimeout(loadDeferred, 100);
-    }
+    // Load on mount and when new messages are added
+    loadHistory();
 
     return () => {
       if (loadHistoryTimeoutRef.current) {
         clearTimeout(loadHistoryTimeoutRef.current);
-      }
-      if ('requestIdleCallback' in window && typeof handle === 'number') {
-        (window as any).cancelIdleCallback(handle);
-      } else if (typeof handle !== 'number') {
-        clearTimeout(handle);
       }
     };
   }, [loadHistory]);
