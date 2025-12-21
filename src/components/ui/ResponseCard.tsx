@@ -32,10 +32,18 @@ export function ResponseCard({ response, error, className }: ResponseCardProps) 
           )}
         </div>
         <div className="flex-1 min-w-0">
-          <p className={cn(
-            'text-sm leading-relaxed',
-            error ? 'text-destructive' : 'text-foreground'
-          )}>
+          <p 
+            className={cn(
+              'text-sm leading-relaxed whitespace-pre-wrap break-words',
+              error ? 'text-destructive' : 'text-foreground'
+            )}
+            style={{ 
+              wordBreak: 'break-word',
+              overflowWrap: 'break-word',
+              // Ensure text is always rendered and not virtualized
+              contain: 'layout style paint'
+            }}
+          >
             {error || response}
           </p>
         </div>

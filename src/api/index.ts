@@ -4,7 +4,7 @@ import { Capacitor, CapacitorHttp } from '@capacitor/core';
 import { Preferences } from '@capacitor/preferences';
 import { logger } from '@/utils/logger';
 
-const API_ENDPOINT = import.meta.env.VITE_API_ENDPOINT || 'http://192.168.1.3:8080';
+const API_ENDPOINT = import.meta.env.VITE_API_ENDPOINT || 'https://hollow-backend.fly.dev';
 const USER_ID_STORAGE_KEY = 'hollow_user_id';
 
 // Deepgram transcription is now handled by the backend
@@ -205,8 +205,14 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
     
     // TIMING: Chat API request
     const chatRequestStart = performance.now();
-    const connectTimeout = isBackground ? 15000 : 30000; // 15s in background, 30s in foreground
-    const readTimeout = isBackground ? 45000 : 60000; // 45s in background, 60s in foreground
+    // Increase timeouts when sending audio - backend needs to transcribe + process
+    // Audio processing can take longer: upload + Deepgram transcription + AI response
+    const connectTimeout = hasAudio 
+      ? (isBackground ? 30000 : 60000)  // 30s/60s for audio (larger payload)
+      : (isBackground ? 15000 : 30000); // 15s/30s for text only
+    const readTimeout = hasAudio
+      ? (isBackground ? 120000 : 180000) // 2min/3min for audio processing
+      : (isBackground ? 45000 : 60000);  // 45s/60s for text only
 
     // Only log detailed info in foreground or dev mode
     if (!isBackground || import.meta.env.DEV) {
@@ -273,8 +279,11 @@ export async function sendTranscription(request: TranscribeRequest): Promise<Tra
     }
 
     const controller = new AbortController();
-    // Use optimized timeout based on background state
-    const fetchTimeout = isBackground ? 45000 : 60000;
+    // Use optimized timeout based on background state and request type
+    // Audio requests need more time: upload + transcription + AI processing
+    const fetchTimeout = hasAudio
+      ? (isBackground ? 120000 : 180000) // 2min/3min for audio
+      : (isBackground ? 45000 : 60000);  // 45s/60s for text
     const timeoutId = setTimeout(() => controller.abort(), fetchTimeout);
 
     const response = await fetch(url, {

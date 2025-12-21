@@ -136,12 +136,20 @@ export function ConversationHistory({ messages, className, onMessageDeleted }: C
                     })}
                   </p>
                 </div>
-                <p className={cn(
-                  'text-sm leading-relaxed',
-                  message.role === 'user'
-                    ? 'text-foreground italic'
-                    : 'text-foreground'
-                )}>
+                <p 
+                  className={cn(
+                    'text-sm leading-relaxed whitespace-pre-wrap break-words',
+                    message.role === 'user'
+                      ? 'text-foreground italic'
+                      : 'text-foreground'
+                  )}
+                  style={{ 
+                    wordBreak: 'break-word',
+                    overflowWrap: 'break-word',
+                    // Ensure text is always rendered and not virtualized
+                    contain: 'layout style paint'
+                  }}
+                >
                   {message.role === 'user' ? `"${message.text}"` : message.text}
                 </p>
               </div>

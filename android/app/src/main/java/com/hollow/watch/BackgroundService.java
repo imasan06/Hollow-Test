@@ -227,27 +227,22 @@ public class BackgroundService extends Service {
     /**
      * Procesa datos de audio directamente en el servicio nativo (alta prioridad)
      * Esto evita depender del WebView que está limitado en background
+     * OPTIMIZATION: Always forward audio data - don't block on processing state
+     * JavaScript layer handles deduplication
      */
     private void processAudioData(byte[] data) {
-        if (isProcessingAudio.get()) {
-            // Ya hay procesamiento en curso, agregar a buffer
-            return;
-        }
-        
-        // Procesar en el handler thread de alta prioridad
+        // Always forward audio data to JavaScript - don't block on processing state
+        // The JavaScript layer (useBle.ts) has deduplication logic to prevent double processing
+        // This ensures audio data is never lost even if previous request is still processing
         bleHandler.post(() -> {
-            if (isProcessingAudio.compareAndSet(false, true)) {
-                try {
-                    // Aquí se procesaría el audio directamente
-                    // Por ahora solo notificamos a JavaScript con los datos raw
-                    // En el futuro se podría decodificar ADPCM aquí mismo
-                    android.util.Log.d("BackgroundService", "Processing audio data: " + data.length + " bytes");
-                    
-                    // Notificar a JavaScript con los datos procesados
-                    notifyJavaScript("bleAudioData", data);
-                } finally {
-                    isProcessingAudio.set(false);
-                }
+            try {
+                android.util.Log.d("BackgroundService", "Processing audio data: " + data.length + " bytes");
+                
+                // Notificar a JavaScript con los datos - siempre, sin bloquear
+                // JavaScript manejará la deduplicación si hay procesamiento en curso
+                notifyJavaScript("bleAudioData", data);
+            } catch (Exception e) {
+                android.util.Log.e("BackgroundService", "Error processing audio data: " + e.getMessage(), e);
             }
         });
     }

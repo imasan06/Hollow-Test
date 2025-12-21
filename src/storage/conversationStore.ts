@@ -4,8 +4,9 @@ import { logger } from '@/utils/logger';
 const CONVERSATION_STORAGE_KEY = 'conversation_history';
 const MAX_CONVERSATION_TURNS = 24;
 // OPTIMIZATION: Limit context sent to API for faster responses
-const MAX_CONTEXT_TURNS = 12; // Send only last 12 messages (6 pairs) to API
-const MAX_CONTEXT_CHARS = 3000; // Limit context to ~3000 chars for faster API response
+// Reduced for better performance - fewer messages = faster API calls
+const MAX_CONTEXT_TURNS = 8; // Send only last 8 messages (4 pairs) to API - reduced from 12
+const MAX_CONTEXT_CHARS = 2000; // Limit context to ~2000 chars for faster API response - reduced from 3000
 
 export interface ConversationMessage {
   role: 'user' | 'assistant';

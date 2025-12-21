@@ -139,18 +139,24 @@ export function WatchApp() {
   // Auto-scroll to bottom when new messages arrive, but only if user is at bottom
   useEffect(() => {
     if (mainScrollRef.current && (conversationHistory.length > 0 || lastResponse || lastTranscription || recordingResponse || recordingTranscription)) {
-      // Small delay to ensure DOM is updated
+      // Small delay to ensure DOM is updated and content is fully rendered
       setTimeout(() => {
         if (mainScrollRef.current && !isUserScrollingRef.current) {
           const container = mainScrollRef.current;
           const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 150;
           
           // Only auto-scroll if user is near the bottom
-          if (isNearBottom) {
-            container.scrollTop = container.scrollHeight;
-          }
+          // Use requestAnimationFrame to ensure DOM is fully rendered
+          requestAnimationFrame(() => {
+            if (container && !isUserScrollingRef.current) {
+              const wasNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 150;
+              if (wasNearBottom) {
+                container.scrollTop = container.scrollHeight;
+              }
+            }
+          });
         }
-      }, 100);
+      }, 150); // Slightly longer delay to ensure content is rendered
     }
   }, [conversationHistory, lastResponse, lastTranscription, recordingResponse, recordingTranscription]);
 
