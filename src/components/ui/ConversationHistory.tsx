@@ -28,7 +28,11 @@ export function ConversationHistory({ messages, className, onMessageDeleted }: C
   // Note: Auto-scroll is handled by parent component (WatchApp) to avoid conflicts
 
   if (messages.length === 0) {
-    return null;
+    return (
+      <div className="w-full text-center py-8 px-4">
+        <p className="text-sm text-muted-foreground italic">Empty chat history</p>
+      </div>
+    );
   }
 
   const handleLongPress = (message: ConversationMessage) => {
@@ -46,6 +50,8 @@ export function ConversationHistory({ messages, className, onMessageDeleted }: C
       if (success) {
         setIsDeleteDialogOpen(false);
         setSelectedMessage(null);
+        // Small delay to ensure storage operation completes before notifying parent
+        await new Promise(resolve => setTimeout(resolve, 100));
         onMessageDeleted?.();
       }
     } catch (error) {

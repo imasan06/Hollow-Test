@@ -126,6 +126,19 @@ export async function getSettings(): Promise<AppSettings> {
       });
     }
 
+    // Initialize persistent context persona ID if not set
+    try {
+      const { getPersistentContextPersonaId, setPersistentContextPersonaId } = await import('@/storage/conversationStore');
+      const currentPersonaId = await getPersistentContextPersonaId();
+      if (!currentPersonaId || currentPersonaId !== settings.activePersonaId) {
+        // Set or update persona ID for persistent context
+        await setPersistentContextPersonaId(settings.activePersonaId);
+      }
+    } catch (error) {
+      // Non-critical - log but don't fail
+      logger.debug('Could not initialize persistent context persona ID', 'Settings');
+    }
+
     return settings;
   } catch (error) {
     logger.error('Error reading settings', 'Settings', error instanceof Error ? error : new Error(String(error)));
@@ -262,6 +275,19 @@ export async function setActivePreset(id: string): Promise<void> {
   if (!preset) {
     throw new Error(`Preset with id ${id} not found`);
   }
+
+  // Check if persona is changing - if so, clear persistent context
+  const { getPersistentContextPersonaId, clearPersistentContext, setPersistentContextPersonaId } = await import('@/storage/conversationStore');
+  const currentPersonaId = await getPersistentContextPersonaId();
+  
+  if (currentPersonaId && currentPersonaId !== id) {
+    // Persona is changing - clear persistent context for new persona
+    await clearPersistentContext();
+    logger.debug(`Persona changed from ${currentPersonaId} to ${id}, cleared persistent context`, 'Settings');
+  }
+  
+  // Update persona ID for persistent context
+  await setPersistentContextPersonaId(id);
 
   settings.activePersonaId = id;
   await saveSettings(settings);

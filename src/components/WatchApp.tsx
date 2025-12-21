@@ -70,43 +70,33 @@ export function WatchApp() {
     wasRecordingRef.current = isRecordingAudio;
   }, [isRecordingAudio, isProcessingAudio, processRecordedAudio]);
 
-  // Load conversation history (excluding current session messages)
+  // Load conversation history - includes current session messages for real-time display
   const loadHistoryRef = useRef<Promise<void> | null>(null);
   const loadHistoryTimeoutRef = useRef<number | null>(null);
   
-  const loadHistory = useCallback(async () => {
-    // Cancel pending load
-    if (loadHistoryTimeoutRef.current) {
+  const loadHistory = useCallback(async (force = false) => {
+    // Cancel pending load if forcing
+    if (force && loadHistoryTimeoutRef.current) {
       clearTimeout(loadHistoryTimeoutRef.current);
       loadHistoryTimeoutRef.current = null;
+      loadHistoryRef.current = null;
     }
 
-    // If already loading, wait for it
-    if (loadHistoryRef.current) {
+    // If already loading and not forcing, wait for it
+    if (!force && loadHistoryRef.current) {
       await loadHistoryRef.current;
       return;
     }
 
-    // Debounce: wait 300ms before loading
+    // Reduced debounce for faster real-time updates: 50ms for immediate updates, 100ms for debounced
+    const debounceTime = force ? 50 : 100;
     loadHistoryRef.current = new Promise((resolve) => {
       loadHistoryTimeoutRef.current = window.setTimeout(async () => {
         try {
           const history = await getConversationHistory();
-          // Filter out current session messages to avoid duplicates
-          const filtered = history.filter((msg) => {
-            // Exclude if it matches current transcription or response (from BLE or audio recorder)
-            const currentTranscription = recordingTranscription || lastTranscription;
-            const currentResponse = recordingResponse || lastResponse;
-            if (currentTranscription && msg.role === 'user' && msg.text === currentTranscription) {
-              return false;
-            }
-            if (currentResponse && msg.role === 'assistant' && msg.text === currentResponse) {
-              return false;
-            }
-            return true;
-          });
+          // Include all messages - don't filter current session to show real-time updates
           // Sort by timestamp (oldest first for display)
-          const sorted = filtered.sort((a, b) => a.timestamp - b.timestamp);
+          const sorted = history.sort((a, b) => a.timestamp - b.timestamp);
           setConversationHistory(sorted);
         } catch (error) {
           logger.error('Failed to load conversation history', 'WatchApp', error instanceof Error ? error : new Error(String(error)));
@@ -114,22 +104,33 @@ export function WatchApp() {
           loadHistoryRef.current = null;
           resolve();
         }
-      }, 300);
+      }, debounceTime);
     });
 
     await loadHistoryRef.current;
-  }, [lastResponse, lastTranscription, recordingResponse, recordingTranscription]);
+  }, []);
 
+  // Load history on mount
   useEffect(() => {
-    // Load on mount and when new messages are added
     loadHistory();
-
+    
     return () => {
       if (loadHistoryTimeoutRef.current) {
         clearTimeout(loadHistoryTimeoutRef.current);
       }
     };
-  }, [loadHistory]);
+  }, []); // Only on mount
+
+  // Reload history when messages change (real-time updates)
+  useEffect(() => {
+    // Small delay to ensure message is saved to storage first
+    // Increased delay to ensure storage write completes
+    const timeoutId = setTimeout(() => {
+      loadHistory(false);
+    }, 250);
+    
+    return () => clearTimeout(timeoutId);
+  }, [lastResponse, lastTranscription, recordingResponse, recordingTranscription, loadHistory]);
 
   // Track if user is manually scrolling (for main container)
   const mainScrollRef = useRef<HTMLDivElement>(null);
@@ -183,7 +184,8 @@ export function WatchApp() {
 
   // Handle message deletion
   const handleMessageDeleted = () => {
-    loadHistory();
+    // Force reload after deletion to ensure UI is updated
+    loadHistory(true);
   };
 
   // Handle clear all history
@@ -192,9 +194,16 @@ export function WatchApp() {
       const { clearConversationHistory } = await import('@/storage/conversationStore');
       await clearConversationHistory();
       setIsClearAllDialogOpen(false);
-      loadHistory();
+      // Immediately clear the state to show empty message
+      setConversationHistory([]);
+      // Small delay to ensure storage operation completes, then force reload
+      await new Promise(resolve => setTimeout(resolve, 200));
+      // Force reload to ensure UI is updated and ready for new messages
+      await loadHistory(true);
     } catch (error) {
       logger.error('Error clearing history', 'WatchApp', error instanceof Error ? error : new Error(String(error)));
+      // Even on error, clear the state
+      setConversationHistory([]);
     }
   };
 
@@ -344,36 +353,34 @@ export function WatchApp() {
             </div>
           </div>
 
-          {/* Conversation History Section - Visible while recording */}
-          {conversationHistory.length > 0 && (
-            <div className="w-full max-w-md border-t border-border pt-6 mt-4">
-              <div className="mb-4 px-4 flex items-start justify-between gap-3">
-                <div className="flex-1 min-w-0">
-                  <h2 className="text-sm font-semibold text-foreground">Conversation History</h2>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    {conversationHistory.length} message{conversationHistory.length !== 1 ? 's' : ''}
-                  </p>
-                </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setIsClearAllDialogOpen(true)}
-                  className="text-destructive border-destructive hover:text-destructive hover:bg-destructive/10 flex-shrink-0 whitespace-nowrap"
-                >
-                  <Trash2 className="h-4 w-4 mr-1.5" />
-                  Clear All
-                </Button>
+          {/* Conversation History Section - Always visible */}
+          <div className="w-full max-w-md border-t border-border pt-6 mt-4">
+            <div className="mb-4 px-4 flex items-start justify-between gap-3">
+              <div className="flex-1 min-w-0">
+                <h2 className="text-sm font-semibold text-foreground">Conversation History</h2>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {conversationHistory.length} message{conversationHistory.length !== 1 ? 's' : ''}
+                </p>
               </div>
-              <div className="px-4">
-                <Suspense fallback={<div className="text-center text-muted-foreground text-sm py-4">Loading history...</div>}>
-                  <ConversationHistory 
-                    messages={conversationHistory} 
-                    onMessageDeleted={handleMessageDeleted}
-                  />
-                </Suspense>
-              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setIsClearAllDialogOpen(true)}
+                className="text-destructive border-destructive hover:text-destructive hover:bg-destructive/10 flex-shrink-0 whitespace-nowrap"
+              >
+                <Trash2 className="h-4 w-4 mr-1.5" />
+                Clear All
+              </Button>
             </div>
-          )}
+            <div className="px-4">
+              <Suspense fallback={<div className="text-center text-muted-foreground text-sm py-4">Loading history...</div>}>
+                <ConversationHistory 
+                  messages={conversationHistory} 
+                  onMessageDeleted={handleMessageDeleted}
+                />
+              </Suspense>
+            </div>
+          </div>
         </div>
       </main>
 
