@@ -23,7 +23,7 @@ import { APP_CONFIG } from '@/config/app.config';
 import { getConversationHistory, ConversationMessage } from '@/storage/conversationStore';
 import { logger } from '@/utils/logger';
 
-// OPTIMIZACIÓN: Lazy load del historial de conversación (no crítico para el primer render)
+
 const ConversationHistory = lazy(() => import('@/components/ui/ConversationHistory').then(m => ({ default: m.ConversationHistory })));
 
 export function WatchApp() {
@@ -41,7 +41,7 @@ export function WatchApp() {
     deviceName,
   } = useBle();
   
-  // Audio recorder for testing
+  
   const {
     isRecording: isRecordingAudio,
     duration: recordingDuration,
@@ -61,41 +61,40 @@ export function WatchApp() {
   const isConnected = connectionState === 'connected';
   const isScanning = connectionState === 'scanning' || connectionState === 'connecting';
   
-  // Handle audio recording stop and processing
+
   useEffect(() => {
     if (wasRecordingRef.current && !isRecordingAudio && !isProcessingAudio) {
-      // Recording just stopped, process the audio
+     
       processRecordedAudio();
     }
     wasRecordingRef.current = isRecordingAudio;
   }, [isRecordingAudio, isProcessingAudio, processRecordedAudio]);
 
-  // Load conversation history - includes current session messages for real-time display
+ 
   const loadHistoryRef = useRef<Promise<void> | null>(null);
   const loadHistoryTimeoutRef = useRef<number | null>(null);
   
   const loadHistory = useCallback(async (force = false) => {
-    // Cancel pending load if forcing
+    
     if (force && loadHistoryTimeoutRef.current) {
       clearTimeout(loadHistoryTimeoutRef.current);
       loadHistoryTimeoutRef.current = null;
       loadHistoryRef.current = null;
     }
 
-    // If already loading and not forcing, wait for it
+    
     if (!force && loadHistoryRef.current) {
       await loadHistoryRef.current;
       return;
     }
 
-    // Reduced debounce for faster real-time updates: 50ms for immediate updates, 100ms for debounced
+   
     const debounceTime = force ? 50 : 100;
     loadHistoryRef.current = new Promise((resolve) => {
       loadHistoryTimeoutRef.current = window.setTimeout(async () => {
         try {
           const history = await getConversationHistory();
-          // Include all messages - don't filter current session to show real-time updates
-          // Sort by timestamp (oldest first for display)
+         
           const sorted = history.sort((a, b) => a.timestamp - b.timestamp);
           setConversationHistory(sorted);
         } catch (error) {
@@ -110,7 +109,7 @@ export function WatchApp() {
     await loadHistoryRef.current;
   }, []);
 
-  // Load history on mount
+ 
   useEffect(() => {
     loadHistory();
     
@@ -119,12 +118,11 @@ export function WatchApp() {
         clearTimeout(loadHistoryTimeoutRef.current);
       }
     };
-  }, []); // Only on mount
+  }, []); 
 
-  // Reload history when messages change (real-time updates)
+  
   useEffect(() => {
-    // Small delay to ensure message is saved to storage first
-    // Increased delay to ensure storage write completes
+   
     const timeoutId = setTimeout(() => {
       loadHistory(false);
     }, 250);
@@ -132,22 +130,21 @@ export function WatchApp() {
     return () => clearTimeout(timeoutId);
   }, [lastResponse, lastTranscription, recordingResponse, recordingTranscription, loadHistory]);
 
-  // Track if user is manually scrolling (for main container)
+  
   const mainScrollRef = useRef<HTMLDivElement>(null);
   const isUserScrollingRef = useRef(false);
   const scrollTimeoutRef = useRef<number | null>(null);
 
-  // Auto-scroll to bottom when new messages arrive, but only if user is at bottom
+ 
   useEffect(() => {
     if (mainScrollRef.current && (conversationHistory.length > 0 || lastResponse || lastTranscription || recordingResponse || recordingTranscription)) {
-      // Small delay to ensure DOM is updated and content is fully rendered
+      
       setTimeout(() => {
         if (mainScrollRef.current && !isUserScrollingRef.current) {
           const container = mainScrollRef.current;
           const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 150;
           
-          // Only auto-scroll if user is near the bottom
-          // Use requestAnimationFrame to ensure DOM is fully rendered
+          
           requestAnimationFrame(() => {
             if (container && !isUserScrollingRef.current) {
               const wasNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 150;
@@ -157,52 +154,52 @@ export function WatchApp() {
             }
           });
         }
-      }, 150); // Slightly longer delay to ensure content is rendered
+      }, 150); 
     }
   }, [conversationHistory, lastResponse, lastTranscription, recordingResponse, recordingTranscription]);
 
-  // Handle scroll events to detect manual scrolling
+  
   const handleScroll = () => {
     if (mainScrollRef.current) {
       const container = mainScrollRef.current;
       const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 150;
       
-      // User is scrolling manually
+      
       isUserScrollingRef.current = !isNearBottom;
       
-      // Clear existing timeout
+     
       if (scrollTimeoutRef.current !== null) {
         clearTimeout(scrollTimeoutRef.current);
       }
       
-      // Reset flag after user stops scrolling for 1 second
+      
       scrollTimeoutRef.current = window.setTimeout(() => {
         isUserScrollingRef.current = false;
       }, 1000);
     }
   };
 
-  // Handle message deletion
+  
   const handleMessageDeleted = () => {
-    // Force reload after deletion to ensure UI is updated
+   
     loadHistory(true);
   };
 
-  // Handle clear all history
+ 
   const handleClearAllHistory = async () => {
     try {
       const { clearConversationHistory } = await import('@/storage/conversationStore');
       await clearConversationHistory();
       setIsClearAllDialogOpen(false);
-      // Immediately clear the state to show empty message
+      
       setConversationHistory([]);
-      // Small delay to ensure storage operation completes, then force reload
+      
       await new Promise(resolve => setTimeout(resolve, 200));
-      // Force reload to ensure UI is updated and ready for new messages
+      
       await loadHistory(true);
     } catch (error) {
       logger.error('Error clearing history', 'WatchApp', error instanceof Error ? error : new Error(String(error)));
-      // Even on error, clear the state
+      
       setConversationHistory([]);
     }
   };

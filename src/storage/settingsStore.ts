@@ -1,8 +1,8 @@
-import { Preferences } from '@capacitor/preferences';
-import { logger } from '@/utils/logger';
+import { Preferences } from "@capacitor/preferences";
+import { logger } from "@/utils/logger";
 
-const SETTINGS_STORAGE_KEY = 'app_settings';
-const DEFAULT_PERSONA = 'You are a helpful AI assistant for the Hollow Watch.';
+const SETTINGS_STORAGE_KEY = "app_settings";
+const DEFAULT_PERSONA = "You are a helpful AI assistant for the Hollow Watch.";
 
 interface LegacyAppSettings {
   persona?: string;
@@ -31,28 +31,27 @@ export interface AppSettings {
   lastUpdated?: number;
 }
 
-
 function generatePresetId(): string {
   return `preset_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 }
-
 
 function createDefaultPreset(): PersonaPreset {
   const now = Date.now();
   return {
     id: generatePresetId(),
-    name: 'Default',
+    name: "Default",
     persona: DEFAULT_PERSONA,
-    rules: '',
-    baseRules: '',
+    rules: "",
+    baseRules: "",
     createdAt: now,
     updatedAt: now,
   };
 }
 
-
-async function migrateLegacySettings(legacy: LegacyAppSettings): Promise<AppSettings> {
-  logger.debug('Migrating legacy settings to preset format', 'Settings');
+async function migrateLegacySettings(
+  legacy: LegacyAppSettings
+): Promise<AppSettings> {
+  logger.debug("Migrating legacy settings to preset format", "Settings");
 
   const defaultPreset = createDefaultPreset();
 
@@ -71,26 +70,26 @@ async function migrateLegacySettings(legacy: LegacyAppSettings): Promise<AppSett
     activePersonaId: defaultPreset.id,
   };
 
-
   await Preferences.set({
     key: SETTINGS_STORAGE_KEY,
     value: JSON.stringify(migrated),
   });
 
-  logger.debug(`Migration complete, created default preset: ${defaultPreset.name}`, 'Settings');
+  logger.debug(
+    `Migration complete, created default preset: ${defaultPreset.name}`,
+    "Settings"
+  );
   return migrated;
 }
-
 
 export async function getSettings(): Promise<AppSettings> {
   try {
     const { value } = await Preferences.get({ key: SETTINGS_STORAGE_KEY });
 
     if (!value) {
-
       const defaultSettings: AppSettings = {
         personas: [createDefaultPreset()],
-        activePersonaId: '',
+        activePersonaId: "",
       };
       defaultSettings.activePersonaId = defaultSettings.personas[0].id;
       await Preferences.set({
@@ -102,8 +101,7 @@ export async function getSettings(): Promise<AppSettings> {
 
     const settings: AppSettings | LegacyAppSettings = JSON.parse(value);
 
-
-    if (!('personas' in settings) || !Array.isArray(settings.personas)) {
+    if (!("personas" in settings) || !Array.isArray(settings.personas)) {
       return await migrateLegacySettings(settings as LegacyAppSettings);
     }
 
@@ -117,8 +115,10 @@ export async function getSettings(): Promise<AppSettings> {
       });
     }
 
-
-    if (!settings.activePersonaId || !settings.personas.find(p => p.id === settings.activePersonaId)) {
+    if (
+      !settings.activePersonaId ||
+      !settings.personas.find((p) => p.id === settings.activePersonaId)
+    ) {
       settings.activePersonaId = settings.personas[0].id;
       await Preferences.set({
         key: SETTINGS_STORAGE_KEY,
@@ -126,22 +126,27 @@ export async function getSettings(): Promise<AppSettings> {
       });
     }
 
-    // Initialize persistent context persona ID if not set
     try {
-      const { getPersistentContextPersonaId, setPersistentContextPersonaId } = await import('@/storage/conversationStore');
+      const { getPersistentContextPersonaId, setPersistentContextPersonaId } =
+        await import("@/storage/conversationStore");
       const currentPersonaId = await getPersistentContextPersonaId();
       if (!currentPersonaId || currentPersonaId !== settings.activePersonaId) {
-        // Set or update persona ID for persistent context
         await setPersistentContextPersonaId(settings.activePersonaId);
       }
     } catch (error) {
-      // Non-critical - log but don't fail
-      logger.debug('Could not initialize persistent context persona ID', 'Settings');
+      logger.debug(
+        "Could not initialize persistent context persona ID",
+        "Settings"
+      );
     }
 
     return settings;
   } catch (error) {
-    logger.error('Error reading settings', 'Settings', error instanceof Error ? error : new Error(String(error)));
+    logger.error(
+      "Error reading settings",
+      "Settings",
+      error instanceof Error ? error : new Error(String(error))
+    );
 
     const defaultPreset = createDefaultPreset();
     return {
@@ -151,8 +156,9 @@ export async function getSettings(): Promise<AppSettings> {
   }
 }
 
-
-export async function saveSettings(settings: Partial<AppSettings>): Promise<void> {
+export async function saveSettings(
+  settings: Partial<AppSettings>
+): Promise<void> {
   try {
     const current = await getSettings();
     const updated: AppSettings = {
@@ -165,36 +171,37 @@ export async function saveSettings(settings: Partial<AppSettings>): Promise<void
       value: JSON.stringify(updated),
     });
 
-    logger.debug('Settings saved', 'Settings');
+    logger.debug("Settings saved", "Settings");
   } catch (error) {
-    logger.error('Error saving settings', 'Settings', error instanceof Error ? error : new Error(String(error)));
+    logger.error(
+      "Error saving settings",
+      "Settings",
+      error instanceof Error ? error : new Error(String(error))
+    );
     throw error;
   }
 }
 
-
 export async function getActivePreset(): Promise<PersonaPreset> {
   const settings = await getSettings();
-  const active = settings.personas.find(p => p.id === settings.activePersonaId);
+  const active = settings.personas.find(
+    (p) => p.id === settings.activePersonaId
+  );
   if (!active) {
-    // Fallback to first preset if active not found
     return settings.personas[0] || createDefaultPreset();
   }
   return active;
 }
-
 
 export async function getPersona(): Promise<string> {
   const preset = await getActivePreset();
   return preset.persona || DEFAULT_PERSONA;
 }
 
-
 export async function getRules(): Promise<string | undefined> {
   const preset = await getActivePreset();
   return preset.rules || undefined;
 }
-
 
 export async function getBaserules(): Promise<string | undefined> {
   const preset = await getActivePreset();
@@ -208,17 +215,17 @@ export async function getAllPresets(): Promise<PersonaPreset[]> {
 
 export async function getPresetById(id: string): Promise<PersonaPreset | null> {
   const settings = await getSettings();
-  return settings.personas.find(p => p.id === id) || null;
+  return settings.personas.find((p) => p.id === id) || null;
 }
 
 export async function createPreset(name: string): Promise<PersonaPreset> {
   const settings = await getSettings();
   const newPreset: PersonaPreset = {
     id: generatePresetId(),
-    name: name.trim() || 'New Preset',
+    name: name.trim() || "New Preset",
     persona: DEFAULT_PERSONA,
-    rules: '',
-    baseRules: '',
+    rules: "",
+    baseRules: "",
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };
@@ -226,13 +233,16 @@ export async function createPreset(name: string): Promise<PersonaPreset> {
   settings.personas.push(newPreset);
   await saveSettings(settings);
 
-  logger.debug(`Created new preset: ${newPreset.name}`, 'Settings');
+  logger.debug(`Created new preset: ${newPreset.name}`, "Settings");
   return newPreset;
 }
 
-export async function updatePreset(id: string, updates: Partial<Omit<PersonaPreset, 'id' | 'createdAt'>>): Promise<void> {
+export async function updatePreset(
+  id: string,
+  updates: Partial<Omit<PersonaPreset, "id" | "createdAt">>
+): Promise<void> {
   const settings = await getSettings();
-  const index = settings.personas.findIndex(p => p.id === id);
+  const index = settings.personas.findIndex((p) => p.id === id);
 
   if (index === -1) {
     throw new Error(`Preset with id ${id} not found`);
@@ -245,58 +255,62 @@ export async function updatePreset(id: string, updates: Partial<Omit<PersonaPres
   };
 
   await saveSettings(settings);
-  logger.debug(`Updated preset: ${settings.personas[index].name}`, 'Settings');
+  logger.debug(`Updated preset: ${settings.personas[index].name}`, "Settings");
 }
-
 
 export async function deletePreset(id: string): Promise<void> {
   const settings = await getSettings();
 
   if (settings.personas.length <= 1) {
-    throw new Error('Cannot delete the last preset');
+    throw new Error("Cannot delete the last preset");
   }
 
-  settings.personas = settings.personas.filter(p => p.id !== id);
-
+  settings.personas = settings.personas.filter((p) => p.id !== id);
 
   if (settings.activePersonaId === id) {
     settings.activePersonaId = settings.personas[0].id;
   }
 
   await saveSettings(settings);
-  logger.debug(`Deleted preset: ${id}`, 'Settings');
+  logger.debug(`Deleted preset: ${id}`, "Settings");
 }
-
 
 export async function setActivePreset(id: string): Promise<void> {
   const settings = await getSettings();
-  const preset = settings.personas.find(p => p.id === id);
+  const preset = settings.personas.find((p) => p.id === id);
 
   if (!preset) {
     throw new Error(`Preset with id ${id} not found`);
   }
 
-  // Check if persona is changing - if so, clear persistent context
-  const { getPersistentContextPersonaId, clearPersistentContext, setPersistentContextPersonaId } = await import('@/storage/conversationStore');
+  const {
+    getPersistentContextPersonaId,
+    clearPersistentContext,
+    setPersistentContextPersonaId,
+  } = await import("@/storage/conversationStore");
   const currentPersonaId = await getPersistentContextPersonaId();
-  
+
   if (currentPersonaId && currentPersonaId !== id) {
-    // Persona is changing - clear persistent context for new persona
     await clearPersistentContext();
-    logger.debug(`Persona changed from ${currentPersonaId} to ${id}, cleared persistent context`, 'Settings');
+    logger.debug(
+      `Persona changed from ${currentPersonaId} to ${id}, cleared persistent context`,
+      "Settings"
+    );
   }
-  
-  // Update persona ID for persistent context
+
   await setPersistentContextPersonaId(id);
 
   settings.activePersonaId = id;
   await saveSettings(settings);
-  logger.debug(`Set active preset: ${preset.name}`, 'Settings');
+  logger.debug(`Set active preset: ${preset.name}`, "Settings");
 }
 
-export async function duplicatePreset(id: string, newName?: string): Promise<PersonaPreset> {
+export async function duplicatePreset(
+  id: string,
+  newName?: string
+): Promise<PersonaPreset> {
   const settings = await getSettings();
-  const source = settings.personas.find(p => p.id === id);
+  const source = settings.personas.find((p) => p.id === id);
 
   if (!source) {
     throw new Error(`Preset with id ${id} not found`);
@@ -313,14 +327,18 @@ export async function duplicatePreset(id: string, newName?: string): Promise<Per
   settings.personas.push(duplicated);
   await saveSettings(settings);
 
-  logger.debug(`Duplicated preset: ${source.name} -> ${duplicated.name}`, 'Settings');
+  logger.debug(
+    `Duplicated preset: ${source.name} -> ${duplicated.name}`,
+    "Settings"
+  );
   return duplicated;
 }
 
-
-export async function upsertPresetByName(presetData: Partial<PersonaPreset> & { name: string }): Promise<PersonaPreset> {
+export async function upsertPresetByName(
+  presetData: Partial<PersonaPreset> & { name: string }
+): Promise<PersonaPreset> {
   const settings = await getSettings();
-  const existing = settings.personas.find(p => p.name === presetData.name);
+  const existing = settings.personas.find((p) => p.name === presetData.name);
 
   if (existing) {
     const updated: PersonaPreset = {
@@ -331,20 +349,19 @@ export async function upsertPresetByName(presetData: Partial<PersonaPreset> & { 
       updatedAt: Date.now(),
     };
 
-    const index = settings.personas.findIndex(p => p.id === existing.id);
+    const index = settings.personas.findIndex((p) => p.id === existing.id);
     settings.personas[index] = updated;
     await saveSettings(settings);
 
-    logger.debug(`Updated preset by name: ${presetData.name}`, 'Settings');
+    logger.debug(`Updated preset by name: ${presetData.name}`, "Settings");
     return updated;
   } else {
-
     const newPreset: PersonaPreset = {
       id: presetData.id || generatePresetId(),
       name: presetData.name,
       persona: presetData.persona || DEFAULT_PERSONA,
-      rules: presetData.rules || '',
-      baseRules: presetData.baseRules || '',
+      rules: presetData.rules || "",
+      baseRules: presetData.baseRules || "",
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
@@ -352,28 +369,32 @@ export async function upsertPresetByName(presetData: Partial<PersonaPreset> & { 
     settings.personas.push(newPreset);
     await saveSettings(settings);
 
-    logger.debug(`Created preset by name: ${presetData.name}`, 'Settings');
+    logger.debug(`Created preset by name: ${presetData.name}`, "Settings");
     return newPreset;
   }
 }
 
-
 export async function resetSettings(): Promise<void> {
   try {
     const settings = await getSettings();
-    const active = settings.personas.find(p => p.id === settings.activePersonaId);
+    const active = settings.personas.find(
+      (p) => p.id === settings.activePersonaId
+    );
 
     if (active) {
       active.persona = DEFAULT_PERSONA;
-      active.rules = '';
-      active.baseRules = '';
+      active.rules = "";
+      active.baseRules = "";
       active.updatedAt = Date.now();
       await saveSettings(settings);
-      logger.debug('Reset active preset to defaults', 'Settings');
+      logger.debug("Reset active preset to defaults", "Settings");
     }
   } catch (error) {
-    logger.error('Error resetting settings', 'Settings', error instanceof Error ? error : new Error(String(error)));
+    logger.error(
+      "Error resetting settings",
+      "Settings",
+      error instanceof Error ? error : new Error(String(error))
+    );
     throw error;
   }
 }
-

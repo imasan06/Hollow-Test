@@ -1,5 +1,4 @@
-
-export type BleMessageType = 'audio' | 'ai_text' | 'control' | 'time';
+export type BleMessageType = "audio" | "ai_text" | "control" | "time";
 
 export interface BleMessage {
   type: BleMessageType;
@@ -8,7 +7,6 @@ export interface BleMessage {
 }
 
 export interface ControlMessage {
-  command: 'REQ_TIME' | 'SET_PERSONA' | 'UNKNOWN';
+  command: "REQ_TIME" | "SET_PERSONA" | "UNKNOWN";
   data?: string;
 }
-

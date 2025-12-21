@@ -1,4 +1,4 @@
-type LogLevel = 'error' | 'warn' | 'info' | 'debug';
+type LogLevel = "error" | "warn" | "info" | "debug";
 
 interface LogEntry {
   level: LogLevel;
@@ -13,10 +13,15 @@ class Logger {
   private logHistory: LogEntry[] = [];
   private maxHistorySize = 100;
 
-  private formatMessage(level: LogLevel, message: string, context?: string, error?: Error): string {
+  private formatMessage(
+    level: LogLevel,
+    message: string,
+    context?: string,
+    error?: Error
+  ): string {
     const timestamp = new Date().toISOString();
-    const contextStr = context ? `[${context}]` : '';
-    const errorStr = error ? ` - ${error.message}` : '';
+    const contextStr = context ? `[${context}]` : "";
+    const errorStr = error ? ` - ${error.message}` : "";
     return `${timestamp} ${level.toUpperCase()} ${contextStr} ${message}${errorStr}`;
   }
 
@@ -29,7 +34,7 @@ class Logger {
 
   error(message: string, context?: string, error?: Error): void {
     const entry: LogEntry = {
-      level: 'error',
+      level: "error",
       message,
       timestamp: new Date().toISOString(),
       context,
@@ -37,47 +42,47 @@ class Logger {
     };
     this.addToHistory(entry);
     if (this.isDevelopment) {
-      console.error(this.formatMessage('error', message, context, error));
+      console.error(this.formatMessage("error", message, context, error));
       if (error) console.error(error);
     }
   }
 
   warn(message: string, context?: string): void {
     const entry: LogEntry = {
-      level: 'warn',
+      level: "warn",
       message,
       timestamp: new Date().toISOString(),
       context,
     };
     this.addToHistory(entry);
     if (this.isDevelopment) {
-      console.warn(this.formatMessage('warn', message, context));
+      console.warn(this.formatMessage("warn", message, context));
     }
   }
 
   info(message: string, context?: string): void {
     const entry: LogEntry = {
-      level: 'info',
+      level: "info",
       message,
       timestamp: new Date().toISOString(),
       context,
     };
     this.addToHistory(entry);
     if (this.isDevelopment) {
-      console.log(this.formatMessage('info', message, context));
+      console.log(this.formatMessage("info", message, context));
     }
   }
 
   debug(message: string, context?: string): void {
     if (this.isDevelopment) {
       const entry: LogEntry = {
-        level: 'debug',
+        level: "debug",
         message,
         timestamp: new Date().toISOString(),
         context,
       };
       this.addToHistory(entry);
-      console.log(this.formatMessage('debug', message, context));
+      console.log(this.formatMessage("debug", message, context));
     }
   }
 
@@ -91,4 +96,3 @@ class Logger {
 }
 
 export const logger = new Logger();
-

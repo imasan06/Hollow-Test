@@ -1,6 +1,6 @@
-import { APP_CONFIG } from '@/config/app.config';
-import { PROTOCOL } from './constants';
-import { logger } from '@/utils/logger';
+import { APP_CONFIG } from "@/config/app.config";
+import { PROTOCOL } from "./constants";
+import { logger } from "@/utils/logger";
 
 interface MockDevice {
   deviceId: string;
@@ -13,27 +13,27 @@ export interface MockBleEvents {
 }
 
 const IMA_STEP_TABLE: number[] = [
-  7, 8, 9, 10, 11, 12, 13, 14, 16, 17,
-  19, 21, 23, 25, 28, 31, 34, 37, 41, 45,
-  50, 55, 60, 66, 73, 80, 88, 97, 107, 118,
-  130, 143, 157, 173, 190, 209, 230, 253, 279, 307,
-  337, 371, 408, 449, 494, 544, 598, 658, 724, 796,
-  876, 963, 1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066,
-  2272, 2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871, 5358,
-  5894, 6484, 7132, 7845, 8630, 9493, 10442, 11487, 12635, 13899,
-  15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767
+  7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45,
+  50, 55, 60, 66, 73, 80, 88, 97, 107, 118, 130, 143, 157, 173, 190, 209, 230,
+  253, 279, 307, 337, 371, 408, 449, 494, 544, 598, 658, 724, 796, 876, 963,
+  1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066, 2272, 2499, 2749, 3024, 3327,
+  3660, 4026, 4428, 4871, 5358, 5894, 6484, 7132, 7845, 8630, 9493, 10442,
+  11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794,
+  32767,
 ];
 
 const IMA_INDEX_TABLE: number[] = [
-  -1, -1, -1, -1, 2, 4, 6, 8,
-  -1, -1, -1, -1, 2, 4, 6, 8
+  -1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8,
 ];
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
 
-function encodeAdpcmNibble(sample: number, state: { predictor: number; stepIndex: number }): number {
+function encodeAdpcmNibble(
+  sample: number,
+  state: { predictor: number; stepIndex: number }
+): number {
   let predictor = state.predictor;
   let stepIndex = state.stepIndex;
   const step = IMA_STEP_TABLE[stepIndex];
@@ -52,17 +52,17 @@ function encodeAdpcmNibble(sample: number, state: { predictor: number; stepIndex
     diff -= step;
     delta += step;
   }
-  if (diff >= (step >> 1)) {
+  if (diff >= step >> 1) {
     nibble |= 2;
     diff -= step >> 1;
     delta += step >> 1;
   }
-  if (diff >= (step >> 2)) {
+  if (diff >= step >> 2) {
     nibble |= 1;
     delta += step >> 2;
   }
 
-  predictor += (nibble & 8) ? -delta : delta;
+  predictor += nibble & 8 ? -delta : delta;
   predictor = clamp(predictor, -32768, 32767);
 
   stepIndex = clamp(stepIndex + IMA_INDEX_TABLE[nibble], 0, 88);
@@ -80,14 +80,19 @@ function encodeImaAdpcm(samples: Int16Array): Uint8Array {
 
   for (let i = 0; i < samples.length; i += 2) {
     const nibble1 = encodeAdpcmNibble(samples[i], state);
-    const nibble2 = (i + 1 < samples.length) ? encodeAdpcmNibble(samples[i + 1], state) : 0;
+    const nibble2 =
+      i + 1 < samples.length ? encodeAdpcmNibble(samples[i + 1], state) : 0;
     out[outIndex++] = nibble1 | (nibble2 << 4);
   }
 
   return out;
 }
 
-function generateSinePcm(durationSeconds: number, frequency: number, sampleRate: number): Int16Array {
+function generateSinePcm(
+  durationSeconds: number,
+  frequency: number,
+  sampleRate: number
+): Int16Array {
   const totalSamples = Math.floor(durationSeconds * sampleRate);
   const pcm = new Int16Array(totalSamples);
   const amplitude = 6000;
@@ -98,7 +103,6 @@ function generateSinePcm(durationSeconds: number, frequency: number, sampleRate:
 
   return pcm;
 }
-
 
 export function generateMockAdpcmAudio(
   durationSeconds: number,
@@ -117,7 +121,7 @@ export function generateMockAdpcmAudio(
 }
 
 export class MockBleService {
-  private device: MockDevice = { deviceId: 'MOCK-DEVICE', name: 'Hollow-DEMO' };
+  private device: MockDevice = { deviceId: "MOCK-DEVICE", name: "Hollow-DEMO" };
   private events: MockBleEvents;
   private connected = false;
 
@@ -126,23 +130,23 @@ export class MockBleService {
   }
 
   async scan(): Promise<MockDevice> {
-    logger.debug('Scanning for Hollow Watch', 'BLE');
+    logger.debug("Scanning for Hollow Watch", "BLE");
     await new Promise((resolve) => setTimeout(resolve, 1000));
-    logger.debug('Device found: Hollow-DEMO', 'BLE');
+    logger.debug("Device found: Hollow-DEMO", "BLE");
     return this.device;
   }
 
   async connect(): Promise<void> {
-    logger.debug('Connecting', 'BLE');
+    logger.debug("Connecting", "BLE");
     await new Promise((resolve) => setTimeout(resolve, 500));
     this.connected = true;
-    logger.debug('Connected', 'BLE');
+    logger.debug("Connected", "BLE");
   }
 
   async startStreaming(): Promise<void> {
     if (!this.connected) return;
 
-    logger.debug('Subscribing to audio notifications', 'BLE');
+    logger.debug("Subscribing to audio notifications", "BLE");
     this.emitText(PROTOCOL.START_VOICE);
 
     const chunks = generateMockAdpcmAudio(
@@ -156,13 +160,20 @@ export class MockBleService {
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
       total += chunk.length;
-      logger.debug(`Chunk ${i + 1}/${chunks.length} (${chunk.length} bytes) - Total: ${total} bytes`, 'BLE');
+      logger.debug(
+        `Chunk ${i + 1}/${chunks.length} (${
+          chunk.length
+        } bytes) - Total: ${total} bytes`,
+        "BLE"
+      );
       this.emitBytes(chunk);
-      await new Promise((resolve) => setTimeout(resolve, APP_CONFIG.MOCK_CHUNK_DELAY_MS));
+      await new Promise((resolve) =>
+        setTimeout(resolve, APP_CONFIG.MOCK_CHUNK_DELAY_MS)
+      );
     }
 
     this.emitText(PROTOCOL.END);
-    logger.debug(`Audio complete: ${total} bytes ADPCM`, 'BLE');
+    logger.debug(`Audio complete: ${total} bytes ADPCM`, "BLE");
   }
 
   disconnect(): void {
@@ -180,4 +191,3 @@ export class MockBleService {
     this.events.onNotification(new DataView(bytes.buffer));
   }
 }
-

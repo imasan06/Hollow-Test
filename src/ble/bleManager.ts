@@ -1,20 +1,24 @@
-import { BleClient, BleDevice } from '@capacitor-community/bluetooth-le';
+import { BleClient, BleDevice } from "@capacitor-community/bluetooth-le";
 import {
   SERVICE_UUID,
   AUDIO_CHAR_UUID,
   TEXT_CHAR_UUID,
   DEVICE_NAME,
   PROTOCOL,
-  BLE_CONFIG
-} from './constants';
-import { APP_CONFIG } from '@/config/app.config';
-import { MockBleService } from './mockBleService';
-import { BleMessageType } from '@/types/bleMessages';
-import { logger } from '@/utils/logger';
-import { isBlePreInitialized, waitForBleReady } from './bleBootstrap';
+  BLE_CONFIG,
+} from "./constants";
+import { APP_CONFIG } from "@/config/app.config";
+import { MockBleService } from "./mockBleService";
+import { BleMessageType } from "@/types/bleMessages";
+import { logger } from "@/utils/logger";
+import { isBlePreInitialized, waitForBleReady } from "./bleBootstrap";
 
-export type ConnectionState = 'disconnected' | 'scanning' | 'connecting' | 'connected';
-export type VoiceState = 'idle' | 'listening' | 'processing' | 'responding';
+export type ConnectionState =
+  | "disconnected"
+  | "scanning"
+  | "connecting"
+  | "connected";
+export type VoiceState = "idle" | "listening" | "processing" | "responding";
 
 export interface BleManagerCallbacks {
   onConnectionStateChange?: (state: ConnectionState) => void | Promise<void>;
@@ -23,15 +27,15 @@ export interface BleManagerCallbacks {
   onVoiceEnd?: () => void;
   onTimeRequest?: () => void;
   onError?: (error: string) => void;
-  onAudioComplete?: (adpcmData: Uint8Array, mode: 'VOICE' | 'SILENT') => void;
+  onAudioComplete?: (adpcmData: Uint8Array, mode: "VOICE" | "SILENT") => void;
   onControlMessage?: (command: string, data?: string) => void;
 }
 
 class BleManager {
   private device: BleDevice | null = null;
-  private lastDeviceId: string | null = null; // Store device ID for reconnection
+  private lastDeviceId: string | null = null;
   private callbacks: BleManagerCallbacks | null = null;
-  private mode: 'VOICE' | 'SILENT' = 'VOICE';
+  private mode: "VOICE" | "SILENT" = "VOICE";
   private audioBuffer: Uint8Array[] = [];
   private isVoiceMode = false;
   private reconnectAttempts = 0;
@@ -42,7 +46,7 @@ class BleManager {
 
   async initialize(callbacks: BleManagerCallbacks): Promise<void> {
     this.callbacks = callbacks;
-    logger.debug(`Mode: ${this.mockMode ? 'MOCK/DEMO' : 'REAL'}`, 'BLE');
+    logger.debug(`Mode: ${this.mockMode ? "MOCK/DEMO" : "REAL"}`, "BLE");
 
     if (this.mockMode) {
       this.isInitialized = true;
@@ -50,62 +54,70 @@ class BleManager {
         onNotification: (value) => this.handleAudioNotification(value),
         onDisconnect: () => this.handleDisconnect(),
       });
-      logger.debug('Mock service ready', 'BLE');
+      logger.debug("Mock service ready", "BLE");
       return;
     }
 
     try {
-      // Usar pre-inicialización si ya está lista (ahorra ~100-200ms)
       if (isBlePreInitialized()) {
-        logger.debug('Using pre-initialized BLE', 'BLE');
+        logger.debug("Using pre-initialized BLE", "BLE");
         this.isInitialized = true;
         return;
       }
 
-      // Esperar pre-inicialización en progreso o inicializar ahora
       await waitForBleReady();
-      
+
       if (isBlePreInitialized()) {
-        logger.debug('BLE pre-initialization completed', 'BLE');
+        logger.debug("BLE pre-initialization completed", "BLE");
         this.isInitialized = true;
         return;
       }
 
-      // Fallback: inicializar ahora si pre-inicialización falló
       await BleClient.initialize();
       this.isInitialized = true;
-      logger.info('Initialized successfully', 'BLE');
+      logger.info("Initialized successfully", "BLE");
     } catch (error) {
-      logger.error('Initialization failed', 'BLE', error instanceof Error ? error : new Error(String(error)));
-      this.callbacks?.onError?.('Failed to initialize Bluetooth');
+      logger.error(
+        "Initialization failed",
+        "BLE",
+        error instanceof Error ? error : new Error(String(error))
+      );
+      this.callbacks?.onError?.("Failed to initialize Bluetooth");
       throw error;
     }
   }
 
   async scan(): Promise<void> {
     if (!this.isInitialized) {
-      throw new Error('BLE not initialized');
+      throw new Error("BLE not initialized");
     }
 
-    this.callbacks?.onConnectionStateChange('scanning');
-    logger.info('Scanning for Hollow Watch', 'BLE');
+    this.callbacks?.onConnectionStateChange("scanning");
+    logger.info("Scanning for Hollow Watch", "BLE");
 
     if (this.mockMode) {
       try {
         const device = await this.mockService!.scan();
         this.device = device as unknown as BleDevice;
-        this.callbacks?.onConnectionStateChange('connecting');
+        this.callbacks?.onConnectionStateChange("connecting");
         await this.connectMock();
       } catch (error) {
-        logger.error('Mock scan failed', 'BLE', error instanceof Error ? error : new Error(String(error)));
-        this.callbacks?.onConnectionStateChange('disconnected');
-        this.callbacks?.onError?.('Mock scan failed');
+        logger.error(
+          "Mock scan failed",
+          "BLE",
+          error instanceof Error ? error : new Error(String(error))
+        );
+        this.callbacks?.onConnectionStateChange("disconnected");
+        this.callbacks?.onError?.("Mock scan failed");
       }
       return;
     }
 
     try {
-      logger.debug(`Scanning for device with namePrefix: "${DEVICE_NAME}"`, 'BLE');
+      logger.debug(
+        `Scanning for device with namePrefix: "${DEVICE_NAME}"`,
+        "BLE"
+      );
 
       const device = await BleClient.requestDevice({
         namePrefix: DEVICE_NAME,
@@ -113,28 +125,38 @@ class BleManager {
       });
 
       if (!device) {
-        throw new Error('No device selected');
+        throw new Error("No device selected");
       }
 
-      logger.info(`Device found: ${device.name ?? 'Unknown'}`, 'BLE');
+      logger.info(`Device found: ${device.name ?? "Unknown"}`, "BLE");
 
       if (device.name && !device.name.startsWith(DEVICE_NAME)) {
-        logger.warn(`Device name "${device.name}" does not match expected prefix "${DEVICE_NAME}"`, 'BLE');
+        logger.warn(
+          `Device name "${device.name}" does not match expected prefix "${DEVICE_NAME}"`,
+          "BLE"
+        );
       }
 
       this.device = device;
       await this.connectReal();
     } catch (error) {
-      logger.error('Scan failed', 'BLE', error instanceof Error ? error : new Error(String(error)));
-      this.callbacks?.onConnectionStateChange('disconnected');
+      logger.error(
+        "Scan failed",
+        "BLE",
+        error instanceof Error ? error : new Error(String(error))
+      );
+      this.callbacks?.onConnectionStateChange("disconnected");
       const errorMsg = error instanceof Error ? error.message : String(error);
-      const isCancelled = errorMsg.toLowerCase().includes('cancel') ||
-        errorMsg.toLowerCase().includes('user') ||
-        errorMsg.toLowerCase().includes('abort');
+      const isCancelled =
+        errorMsg.toLowerCase().includes("cancel") ||
+        errorMsg.toLowerCase().includes("user") ||
+        errorMsg.toLowerCase().includes("abort");
 
       const errorMessage = isCancelled
-        ? 'Connection cancelled'
-        : (error instanceof Error ? error.message : 'Scan failed');
+        ? "Connection cancelled"
+        : error instanceof Error
+        ? error.message
+        : "Scan failed";
 
       this.callbacks?.onError?.(errorMessage);
     }
@@ -142,20 +164,20 @@ class BleManager {
 
   private async connectReal(): Promise<void> {
     if (!this.device) {
-      throw new Error('No device to connect');
+      throw new Error("No device to connect");
     }
 
-    this.callbacks?.onConnectionStateChange('connecting');
-    logger.info('Connecting', 'BLE');
+    this.callbacks?.onConnectionStateChange("connecting");
+    logger.info("Connecting", "BLE");
 
     try {
       await BleClient.connect(this.device.deviceId, (deviceId) => {
-        logger.info(`Disconnected: ${deviceId}`, 'BLE');
+        logger.info(`Disconnected: ${deviceId}`, "BLE");
         this.handleDisconnect();
       });
 
-      logger.info('Connected', 'BLE');
-      
+      logger.info("Connected", "BLE");
+
       // Store device ID for potential reconnection
       this.lastDeviceId = this.device.deviceId;
 
@@ -166,23 +188,26 @@ class BleManager {
         (value) => this.handleAudioNotification(value)
       );
 
-      logger.debug('Subscribed to audio notifications', 'BLE');
-      this.callbacks?.onConnectionStateChange('connected');
+      logger.debug("Subscribed to audio notifications", "BLE");
+      this.callbacks?.onConnectionStateChange("connected");
       this.reconnectAttempts = 0;
-
     } catch (error) {
-      logger.error('Connection failed', 'BLE', error instanceof Error ? error : new Error(String(error)));
-      this.callbacks?.onConnectionStateChange('disconnected');
-      this.callbacks?.onError?.('Failed to connect to watch');
+      logger.error(
+        "Connection failed",
+        "BLE",
+        error instanceof Error ? error : new Error(String(error))
+      );
+      this.callbacks?.onConnectionStateChange("disconnected");
+      this.callbacks?.onError?.("Failed to connect to watch");
       this.attemptReconnect();
     }
   }
 
   private async connectMock(): Promise<void> {
     if (!this.mockService) return;
-    this.callbacks?.onConnectionStateChange('connecting');
+    this.callbacks?.onConnectionStateChange("connecting");
     await this.mockService.connect();
-    this.callbacks?.onConnectionStateChange('connected');
+    this.callbacks?.onConnectionStateChange("connected");
     this.chunkCounter = 0;
     await this.mockService.startStreaming();
   }
@@ -203,18 +228,17 @@ class BleManager {
       msg = null;
     }
 
-
     if (msg === PROTOCOL.REQ_TIME) {
-      logger.debug('REQ_TIME received', 'BLE');
+      logger.debug("REQ_TIME received", "BLE");
       this.callbacks?.onTimeRequest?.();
-      this.callbacks?.onControlMessage?.('REQ_TIME');
+      this.callbacks?.onControlMessage?.("REQ_TIME");
       return;
     }
 
-    if (msg && msg.startsWith('SET_PERSONA')) {
-      logger.debug(`Control message received: ${msg}`, 'BLE');
+    if (msg && msg.startsWith("SET_PERSONA")) {
+      logger.debug(`Control message received: ${msg}`, "BLE");
 
-      const colonIndex = msg.indexOf(':');
+      const colonIndex = msg.indexOf(":");
       if (colonIndex !== -1) {
         const command = msg.substring(0, colonIndex);
         const data = msg.substring(colonIndex + 1);
@@ -226,35 +250,38 @@ class BleManager {
     }
 
     if (msg === PROTOCOL.START_VOICE) {
-      logger.debug('START_V received', 'BLE');
+      logger.debug("START_V received", "BLE");
       this.audioBuffer = [];
-      this.mode = 'VOICE';
+      this.mode = "VOICE";
       this.isVoiceMode = true;
       this.chunkCounter = 0;
-      this.callbacks?.onVoiceStateChange?.('listening');
+      this.callbacks?.onVoiceStateChange?.("listening");
       return;
     }
 
     if (msg === PROTOCOL.START_SILENT) {
-      logger.debug('START_S received', 'BLE');
+      logger.debug("START_S received", "BLE");
       this.audioBuffer = [];
-      this.mode = 'SILENT';
+      this.mode = "SILENT";
       this.isVoiceMode = true;
       this.chunkCounter = 0;
-      this.callbacks?.onVoiceStateChange?.('listening');
+      this.callbacks?.onVoiceStateChange?.("listening");
       return;
     }
 
     if (msg === PROTOCOL.END) {
-      logger.debug('END received', 'BLE');
+      logger.debug("END received", "BLE");
 
       if (!this.audioBuffer.length) {
-        logger.warn('END received but no ADPCM data buffered', 'BLE');
+        logger.warn("END received but no ADPCM data buffered", "BLE");
         this.isVoiceMode = false;
         return;
       }
 
-      const totalLength = this.audioBuffer.reduce((sum, chunk) => sum + chunk.length, 0);
+      const totalLength = this.audioBuffer.reduce(
+        (sum, chunk) => sum + chunk.length,
+        0
+      );
       const merged = new Uint8Array(totalLength);
       let offset = 0;
       for (const chunk of this.audioBuffer) {
@@ -271,15 +298,23 @@ class BleManager {
 
     if (this.isVoiceMode) {
       this.chunkCounter++;
-      const total = this.audioBuffer.reduce((sum, chunk) => sum + chunk.length, 0) + data.length;
-      logger.debug(`Chunk ${this.chunkCounter} (${data.length} bytes) - Total: ${total} bytes`, 'BLE');
+      const total =
+        this.audioBuffer.reduce((sum, chunk) => sum + chunk.length, 0) +
+        data.length;
+      logger.debug(
+        `Chunk ${this.chunkCounter} (${data.length} bytes) - Total: ${total} bytes`,
+        "BLE"
+      );
       this.audioBuffer.push(data);
       this.callbacks?.onAudioData?.(data);
     }
   }
 
   getAudioBuffer(): Uint8Array {
-    const totalLength = this.audioBuffer.reduce((sum, chunk) => sum + chunk.length, 0);
+    const totalLength = this.audioBuffer.reduce(
+      (sum, chunk) => sum + chunk.length,
+      0
+    );
     const combined = new Uint8Array(totalLength);
     let offset = 0;
 
@@ -295,25 +330,24 @@ class BleManager {
     this.audioBuffer = [];
   }
 
-
   async sendText(text: string): Promise<void> {
     if (this.mockMode) {
-      logger.debug('Skipping sendText, mock device', 'BLE');
+      logger.debug("Skipping sendText, mock device", "BLE");
       return;
     }
 
     if (!this.device) {
-      logger.warn('Cannot send text - device not connected', 'BLE');
-      throw new Error('Not connected to device');
+      logger.warn("Cannot send text - device not connected", "BLE");
+      throw new Error("Not connected to device");
     }
 
     // Double-check connection state before attempting to write
     if (!this.isConnected()) {
-      logger.warn('Cannot send text - connection check failed', 'BLE');
-      throw new Error('Not connected to device');
+      logger.warn("Cannot send text - connection check failed", "BLE");
+      throw new Error("Not connected to device");
     }
 
-    logger.debug(`Sending AI text response (${text.length} bytes)`, 'BLE');
+    logger.debug(`Sending AI text response (${text.length} bytes)`, "BLE");
 
     const encoder = new TextEncoder();
     const fullData = encoder.encode(text);
@@ -321,19 +355,23 @@ class BleManager {
 
     try {
       if (fullData.length <= maxChunkSize) {
-        const dataView = new DataView(fullData.buffer, fullData.byteOffset, fullData.byteLength);
+        const dataView = new DataView(
+          fullData.buffer,
+          fullData.byteOffset,
+          fullData.byteLength
+        );
         await BleClient.write(
           this.device.deviceId,
           SERVICE_UUID,
           TEXT_CHAR_UUID,
           dataView
         );
-        logger.debug('AI text sent successfully (single chunk)', 'BLE');
+        logger.debug("AI text sent successfully (single chunk)", "BLE");
         return;
       }
 
       const totalChunks = Math.ceil(fullData.length / maxChunkSize);
-      logger.debug(`Fragmenting message into ${totalChunks} chunks`, 'BLE');
+      logger.debug(`Fragmenting message into ${totalChunks} chunks`, "BLE");
       let offset = 0;
       let chunkIndex = 0;
 
@@ -341,7 +379,11 @@ class BleManager {
         while (offset < fullData.length) {
           const chunkSize = Math.min(maxChunkSize, fullData.length - offset);
           const chunk = fullData.slice(offset, offset + chunkSize);
-          const dataView = new DataView(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+          const dataView = new DataView(
+            chunk.buffer,
+            chunk.byteOffset,
+            chunk.byteLength
+          );
 
           try {
             await BleClient.write(
@@ -354,51 +396,83 @@ class BleManager {
             chunkIndex++;
             offset += chunkSize;
 
-            logger.debug(`Sent chunk ${chunkIndex}/${totalChunks} (${chunkSize} bytes)`, 'BLE');
+            logger.debug(
+              `Sent chunk ${chunkIndex}/${totalChunks} (${chunkSize} bytes)`,
+              "BLE"
+            );
 
             if (offset < fullData.length) {
-              await new Promise(resolve => setTimeout(resolve, 50));
+              await new Promise((resolve) => setTimeout(resolve, 50));
             }
           } catch (chunkError) {
-            logger.error(`Failed to send chunk ${chunkIndex + 1}/${totalChunks}`, 'BLE', chunkError instanceof Error ? chunkError : new Error(String(chunkError)));
-            throw new Error(`Failed to send chunk ${chunkIndex + 1}: ${chunkError instanceof Error ? chunkError.message : String(chunkError)}`);
+            logger.error(
+              `Failed to send chunk ${chunkIndex + 1}/${totalChunks}`,
+              "BLE",
+              chunkError instanceof Error
+                ? chunkError
+                : new Error(String(chunkError))
+            );
+            throw new Error(
+              `Failed to send chunk ${chunkIndex + 1}: ${
+                chunkError instanceof Error
+                  ? chunkError.message
+                  : String(chunkError)
+              }`
+            );
           }
         }
 
-        logger.debug('AI text sent successfully (fragmented)', 'BLE');
+        logger.debug("AI text sent successfully (fragmented)", "BLE");
       } catch (fragError) {
-        logger.error('Fragmentation failed', 'BLE', fragError instanceof Error ? fragError : new Error(String(fragError)));
+        logger.error(
+          "Fragmentation failed",
+          "BLE",
+          fragError instanceof Error ? fragError : new Error(String(fragError))
+        );
         throw fragError;
       }
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
       // Don't show error to user if device disconnected - this is expected in some scenarios
-      if (errorMsg.includes('Not connected') || errorMsg.includes('disconnect') || errorMsg.includes('failed')) {
-        logger.warn(`Failed to send AI text (device may have disconnected): ${errorMsg}`, 'BLE');
+      if (
+        errorMsg.includes("Not connected") ||
+        errorMsg.includes("disconnect") ||
+        errorMsg.includes("failed")
+      ) {
+        logger.warn(
+          `Failed to send AI text (device may have disconnected): ${errorMsg}`,
+          "BLE"
+        );
       } else {
-        logger.error('Failed to send AI text', 'BLE', error instanceof Error ? error : new Error(String(error)));
-        this.callbacks?.onError?.('Failed to send response to watch');
+        logger.error(
+          "Failed to send AI text",
+          "BLE",
+          error instanceof Error ? error : new Error(String(error))
+        );
+        this.callbacks?.onError?.("Failed to send response to watch");
       }
       throw error;
     }
   }
 
-
   async sendAiText(text: string): Promise<void> {
     const bleSendStart = performance.now();
     await this.sendText(text);
     const bleSendTime = performance.now() - bleSendStart;
-    logger.info(`[TIMING] BLE send to watch: ${bleSendTime.toFixed(2)}ms`, 'BLE');
+    logger.info(
+      `[TIMING] BLE send to watch: ${bleSendTime.toFixed(2)}ms`,
+      "BLE"
+    );
   }
 
   async sendTime(): Promise<void> {
     if (this.mockMode) {
-      logger.debug('Skipping time sync', 'BLE');
+      logger.debug("Skipping time sync", "BLE");
       return;
     }
 
     if (!this.device) {
-      logger.warn('Cannot send time - not connected', 'BLE');
+      logger.warn("Cannot send time - not connected", "BLE");
       return;
     }
 
@@ -412,17 +486,28 @@ class BleManager {
     const localMinutes = now.getMinutes();
     const localSeconds = now.getSeconds();
 
-    const localAsUTCTimestamp = Date.UTC(localYear, localMonth, localDate, localHours, localMinutes, localSeconds);
+    const localAsUTCTimestamp = Date.UTC(
+      localYear,
+      localMonth,
+      localDate,
+      localHours,
+      localMinutes,
+      localSeconds
+    );
     const epochSeconds = Math.floor(localAsUTCTimestamp / 1000);
 
     const timeString = `${PROTOCOL.TIME_PREFIX}${epochSeconds}`;
 
-    logger.debug(`Sending time: ${timeString}`, 'BLE');
+    logger.debug(`Sending time: ${timeString}`, "BLE");
 
     try {
       const encoder = new TextEncoder();
       const data = encoder.encode(timeString);
-      const dataView = new DataView(data.buffer, data.byteOffset, data.byteLength);
+      const dataView = new DataView(
+        data.buffer,
+        data.byteOffset,
+        data.byteLength
+      );
 
       await BleClient.write(
         this.device.deviceId,
@@ -431,16 +516,20 @@ class BleManager {
         dataView
       );
 
-      logger.debug('Time sent successfully', 'BLE');
+      logger.debug("Time sent successfully", "BLE");
     } catch (error) {
-      logger.error('Failed to send time', 'BLE', error instanceof Error ? error : new Error(String(error)));
+      logger.error(
+        "Failed to send time",
+        "BLE",
+        error instanceof Error ? error : new Error(String(error))
+      );
     }
   }
 
   private handleDisconnect(): void {
-    logger.info('Device disconnected', 'BLE');
-    this.callbacks?.onConnectionStateChange('disconnected');
-    this.callbacks?.onVoiceStateChange('idle');
+    logger.info("Device disconnected", "BLE");
+    this.callbacks?.onConnectionStateChange("disconnected");
+    this.callbacks?.onVoiceStateChange("idle");
     this.isVoiceMode = false;
     this.chunkCounter = 0;
     this.clearAudioBuffer();
@@ -452,11 +541,14 @@ class BleManager {
     }
 
     // Only attempt reconnect if we have a device ID and haven't exceeded max attempts
-    if (this.lastDeviceId && this.reconnectAttempts < BLE_CONFIG.MAX_RECONNECT_ATTEMPTS) {
+    if (
+      this.lastDeviceId &&
+      this.reconnectAttempts < BLE_CONFIG.MAX_RECONNECT_ATTEMPTS
+    ) {
       this.attemptReconnect();
     } else if (this.reconnectAttempts >= BLE_CONFIG.MAX_RECONNECT_ATTEMPTS) {
-      logger.warn('Max reconnection attempts reached, stopping', 'BLE');
-      this.callbacks?.onError?.('Connection lost. Please reconnect manually.');
+      logger.warn("Max reconnection attempts reached, stopping", "BLE");
+      this.callbacks?.onError?.("Connection lost. Please reconnect manually.");
       this.device = null;
       this.lastDeviceId = null;
     } else {
@@ -466,34 +558,38 @@ class BleManager {
 
   private async attemptReconnect(): Promise<void> {
     if (this.reconnectAttempts >= BLE_CONFIG.MAX_RECONNECT_ATTEMPTS) {
-      logger.warn('Max reconnect attempts reached', 'BLE');
-      this.callbacks?.onError?.('Unable to reconnect. Please scan again.');
+      logger.warn("Max reconnect attempts reached", "BLE");
+      this.callbacks?.onError?.("Unable to reconnect. Please scan again.");
       this.device = null;
       this.lastDeviceId = null;
       return;
     }
 
     if (!this.lastDeviceId) {
-      logger.warn('No device ID available for reconnection', 'BLE');
+      logger.warn("No device ID available for reconnection", "BLE");
       return;
     }
 
     this.reconnectAttempts++;
-    logger.info(`Reconnect attempt ${this.reconnectAttempts}/${BLE_CONFIG.MAX_RECONNECT_ATTEMPTS}`, 'BLE');
+    logger.info(
+      `Reconnect attempt ${this.reconnectAttempts}/${BLE_CONFIG.MAX_RECONNECT_ATTEMPTS}`,
+      "BLE"
+    );
 
     // Exponential backoff: 2s, 4s, 8s, etc.
-    const delay = BLE_CONFIG.RECONNECT_DELAY * Math.pow(2, this.reconnectAttempts - 1);
-    await new Promise(resolve => setTimeout(resolve, delay));
+    const delay =
+      BLE_CONFIG.RECONNECT_DELAY * Math.pow(2, this.reconnectAttempts - 1);
+    await new Promise((resolve) => setTimeout(resolve, delay));
 
     try {
       // Try to reconnect using the stored device ID
       await BleClient.connect(this.lastDeviceId, (deviceId) => {
-        logger.info(`Disconnected during reconnect: ${deviceId}`, 'BLE');
+        logger.info(`Disconnected during reconnect: ${deviceId}`, "BLE");
         this.handleDisconnect();
       });
 
-      logger.info('Reconnected successfully', 'BLE');
-      
+      logger.info("Reconnected successfully", "BLE");
+
       // Recreate device object for notifications
       this.device = { deviceId: this.lastDeviceId } as BleDevice;
 
@@ -504,11 +600,15 @@ class BleManager {
         (value) => this.handleAudioNotification(value)
       );
 
-      logger.debug('Subscribed to audio notifications after reconnect', 'BLE');
-      this.callbacks?.onConnectionStateChange('connected');
+      logger.debug("Subscribed to audio notifications after reconnect", "BLE");
+      this.callbacks?.onConnectionStateChange("connected");
       this.reconnectAttempts = 0;
     } catch (error) {
-      logger.error('Reconnect failed', 'BLE', error instanceof Error ? error : new Error(String(error)));
+      logger.error(
+        "Reconnect failed",
+        "BLE",
+        error instanceof Error ? error : new Error(String(error))
+      );
       // Will retry if attempts < max
       if (this.reconnectAttempts < BLE_CONFIG.MAX_RECONNECT_ATTEMPTS) {
         this.attemptReconnect();
@@ -519,7 +619,7 @@ class BleManager {
   async disconnect(): Promise<void> {
     // Reset reconnection attempts on manual disconnect
     this.reconnectAttempts = BLE_CONFIG.MAX_RECONNECT_ATTEMPTS;
-    
+
     if (this.device && !this.mockMode) {
       try {
         await BleClient.stopNotifications(
@@ -529,10 +629,14 @@ class BleManager {
         );
         await BleClient.disconnect(this.device.deviceId);
       } catch (error) {
-        logger.error('Disconnect error', 'BLE', error instanceof Error ? error : new Error(String(error)));
+        logger.error(
+          "Disconnect error",
+          "BLE",
+          error instanceof Error ? error : new Error(String(error))
+        );
       }
     }
-    
+
     this.device = null;
     this.lastDeviceId = null;
 
@@ -543,8 +647,8 @@ class BleManager {
     this.device = null;
     this.isVoiceMode = false;
     this.audioBuffer = [];
-    this.callbacks?.onConnectionStateChange('disconnected');
-    this.callbacks?.onVoiceStateChange('idle');
+    this.callbacks?.onConnectionStateChange("disconnected");
+    this.callbacks?.onVoiceStateChange("idle");
   }
 
   isConnected(): boolean {
