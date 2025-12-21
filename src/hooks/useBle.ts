@@ -48,6 +48,10 @@ export function useBle(): UseBleReturn {
   // When both BluetoothLe plugin and BackgroundService process the same audio
   const lastAudioProcessedTime = useRef<number>(0);
   const AUDIO_DEDUP_WINDOW_MS = 2000; // 2 second window to prevent duplicate processing
+  
+  // Safety mechanism: Auto-reset processing flag after timeout to prevent permanent blocking
+  const processingTimeoutRef = useRef<number | null>(null);
+  const MAX_PROCESSING_TIME_MS = 180000; // 3 minutes max (matches API timeout)
 
   const handlePersonaUpdateFromWatch = useCallback(async (data: string) => {
     try {
@@ -102,8 +106,22 @@ export function useBle(): UseBleReturn {
       // Prevents double processing when both BluetoothLe plugin and BackgroundService
       // send the same audio data (which happens in foreground mode)
       if (isProcessingRequest.current) {
-        logger.warn('Another request is in progress, ignoring this audio', 'Hook');
-        return;
+        const timeSinceStart = now - lastAudioProcessedTime.current;
+        logger.warn(`Another request is in progress (${timeSinceStart}ms ago), ignoring this audio`, 'Hook');
+        
+        // Safety: If processing has been stuck for too long, reset it
+        if (timeSinceStart > MAX_PROCESSING_TIME_MS) {
+          logger.error('Processing flag stuck for too long - forcing reset', 'Hook');
+          isProcessingRequest.current = false;
+          setIsProcessing(false);
+          setVoiceState('idle');
+          if (processingTimeoutRef.current) {
+            clearTimeout(processingTimeoutRef.current);
+            processingTimeoutRef.current = null;
+          }
+        } else {
+          return;
+        }
       }
       
       // Check if we recently processed audio (within dedup window)
@@ -132,6 +150,20 @@ export function useBle(): UseBleReturn {
       const sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       activeSessionId.current = sessionId;
       isProcessingRequest.current = true;
+
+      // Safety mechanism: Auto-reset processing flag after max time to prevent permanent blocking
+      if (processingTimeoutRef.current) {
+        clearTimeout(processingTimeoutRef.current);
+      }
+      processingTimeoutRef.current = window.setTimeout(() => {
+        if (isProcessingRequest.current && activeSessionId.current === sessionId) {
+          logger.warn('Processing timeout - auto-resetting processing flag', 'Hook');
+          isProcessingRequest.current = false;
+          setIsProcessing(false);
+          setVoiceState('idle');
+        }
+        processingTimeoutRef.current = null;
+      }, MAX_PROCESSING_TIME_MS);
 
       setIsProcessing(true);
       setVoiceState('processing');
@@ -315,12 +347,20 @@ export function useBle(): UseBleReturn {
           logger.warn('Error in stale session, ignoring', 'Hook');
         }
       } finally {
+        // Clear safety timeout
+        if (processingTimeoutRef.current) {
+          clearTimeout(processingTimeoutRef.current);
+          processingTimeoutRef.current = null;
+        }
 
+        // Always reset processing flag, even if session changed (safety mechanism)
+        // This prevents the flag from getting stuck if there's an error or timeout
         if (activeSessionId.current === sessionId) {
           setIsProcessing(false);
           setVoiceState('idle');
-          isProcessingRequest.current = false;
         }
+        // Always reset the flag to allow new requests (critical for background processing)
+        isProcessingRequest.current = false;
         chunkCount.current = 0;
       }
     },
@@ -355,17 +395,25 @@ export function useBle(): UseBleReturn {
             // send the same audio data
             if (eventData.data) {
               try {
+                logger.debug(`Received bleAudioData event: ${eventData.data.length} chars (base64)`, 'Hook');
                 // Convertir base64 a Uint8Array
                 const binaryString = atob(eventData.data);
                 const bytes = new Uint8Array(binaryString.length);
                 for (let i = 0; i < binaryString.length; i++) {
                   bytes[i] = binaryString.charCodeAt(i);
                 }
+                logger.debug(`Converted to ${bytes.length} bytes, calling processAudio`, 'Hook');
                 // processAudio has deduplication - will skip if already processed recently
                 processAudio(bytes, 'VOICE');
               } catch (error) {
                 logger.error('Error processing native audio data', 'Hook', error instanceof Error ? error : new Error(String(error)));
+                // Ensure processing flag is reset on error
+                isProcessingRequest.current = false;
+                setIsProcessing(false);
+                setVoiceState('idle');
               }
+            } else {
+              logger.warn('bleAudioData event received but data is missing', 'Hook');
             }
             break;
 
@@ -468,6 +516,12 @@ export function useBle(): UseBleReturn {
 
             activeSessionId.current = null;
             isProcessingRequest.current = false;
+            
+            // Clear any pending processing timeout
+            if (processingTimeoutRef.current) {
+              clearTimeout(processingTimeoutRef.current);
+              processingTimeoutRef.current = null;
+            }
 
             setVoiceState('idle');
           }
