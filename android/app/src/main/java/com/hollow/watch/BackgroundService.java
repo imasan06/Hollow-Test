@@ -24,12 +24,23 @@ public class BackgroundService extends Service {
     private static final String EXTRA_DEVICE_ADDRESS = "device_address";
     private static final String BLE_HANDLER_THREAD = "HollowWatch::BLEHandler";
     
+    // Protocol constants (must match ESP32 firmware)
+    private static final String PROTOCOL_START_VOICE = "START_V";
+    private static final String PROTOCOL_START_SILENT = "START_S";
+    private static final String PROTOCOL_END = "END";
+    private static final String PROTOCOL_REQ_TIME = "REQ_TIME";
+    
     private PowerManager.WakeLock wakeLock;
     private BleConnectionManager bleManager;
     private String connectedDeviceAddress;
     private HandlerThread bleHandlerThread;
     private Handler bleHandler;
     private AtomicBoolean isProcessingAudio = new AtomicBoolean(false);
+    
+    // Audio buffering for protocol handling
+    private java.util.List<byte[]> audioBuffer = new java.util.ArrayList<>();
+    private boolean isVoiceMode = false;
+    private String currentMode = "VOICE"; // "VOICE" or "SILENT"
 
     @Override
     public void onCreate() {
@@ -226,21 +237,95 @@ public class BackgroundService extends Service {
     
     /**
      * Procesa datos de audio directamente en el servicio nativo (alta prioridad)
-     * Esto evita depender del WebView que está limitado en background
-     * OPTIMIZATION: Always forward audio data - don't block on processing state
-     * JavaScript layer handles deduplication
+     * Maneja el protocolo BLE: START_V/START_S -> chunks -> END
+     * Solo envía audio completo a JavaScript cuando se recibe END
      */
     private void processAudioData(byte[] data) {
-        // Always forward audio data to JavaScript - don't block on processing state
-        // The JavaScript layer (useBle.ts) has deduplication logic to prevent double processing
-        // This ensures audio data is never lost even if previous request is still processing
         bleHandler.post(() -> {
             try {
-                android.util.Log.d("BackgroundService", "Processing audio data: " + data.length + " bytes");
+                // Try to decode as text to check for control messages
+                String message = null;
+                try {
+                    String decoded = new String(data, "UTF-8").trim();
+                    // Check if it's printable ASCII (control message)
+                    if (decoded.matches("^[\\x20-\\x7E]+$")) {
+                        message = decoded;
+                    }
+                } catch (Exception e) {
+                    // Not a text message, treat as binary audio data
+                }
                 
-                // Notificar a JavaScript con los datos - siempre, sin bloquear
-                // JavaScript manejará la deduplicación si hay procesamiento en curso
-                notifyJavaScript("bleAudioData", data);
+                // Handle protocol messages
+                if (message != null) {
+                    if (message.equals(PROTOCOL_REQ_TIME)) {
+                        android.util.Log.d("BackgroundService", "REQ_TIME received - ignoring (handled by bleManager)");
+                        return;
+                    }
+                    
+                    if (message.startsWith("SET_PERSONA")) {
+                        android.util.Log.d("BackgroundService", "SET_PERSONA received - ignoring (handled by bleManager)");
+                        return;
+                    }
+                    
+                    if (message.equals(PROTOCOL_START_VOICE)) {
+                        android.util.Log.d("BackgroundService", "START_V received - starting audio buffer");
+                        audioBuffer.clear();
+                        isVoiceMode = true;
+                        currentMode = "VOICE";
+                        return;
+                    }
+                    
+                    if (message.equals(PROTOCOL_START_SILENT)) {
+                        android.util.Log.d("BackgroundService", "START_S received - starting audio buffer (silent mode)");
+                        audioBuffer.clear();
+                        isVoiceMode = true;
+                        currentMode = "SILENT";
+                        return;
+                    }
+                    
+                    if (message.equals(PROTOCOL_END)) {
+                        android.util.Log.d("BackgroundService", "END received - processing buffered audio");
+                        
+                        if (audioBuffer.isEmpty()) {
+                            android.util.Log.w("BackgroundService", "END received but no audio buffered");
+                            isVoiceMode = false;
+                            return;
+                        }
+                        
+                        // Combine all buffered chunks
+                        int totalLength = 0;
+                        for (byte[] chunk : audioBuffer) {
+                            totalLength += chunk.length;
+                        }
+                        
+                        byte[] mergedAudio = new byte[totalLength];
+                        int offset = 0;
+                        for (byte[] chunk : audioBuffer) {
+                            System.arraycopy(chunk, 0, mergedAudio, offset, chunk.length);
+                            offset += chunk.length;
+                        }
+                        
+                        android.util.Log.d("BackgroundService", "Sending complete audio to JavaScript: " + mergedAudio.length + " bytes from " + audioBuffer.size() + " chunks");
+                        
+                        // Clear buffer and reset state
+                        audioBuffer.clear();
+                        isVoiceMode = false;
+                        
+                        // Send complete audio to JavaScript
+                        notifyJavaScript("bleAudioData", mergedAudio);
+                        return;
+                    }
+                }
+                
+                // If in voice mode, buffer the audio chunk
+                if (isVoiceMode) {
+                    audioBuffer.add(data.clone());
+                    android.util.Log.d("BackgroundService", "Audio chunk buffered: " + data.length + " bytes (total chunks: " + audioBuffer.size() + ")");
+                } else {
+                    // Not in voice mode and not a control message - might be stray data
+                    android.util.Log.d("BackgroundService", "Data received outside voice mode: " + data.length + " bytes - ignoring");
+                }
+                
             } catch (Exception e) {
                 android.util.Log.e("BackgroundService", "Error processing audio data: " + e.getMessage(), e);
             }

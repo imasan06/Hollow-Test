@@ -16,7 +16,8 @@ import {
   formatConversationContext,
 } from "@/storage/conversationStore";
 import { timeSyncService } from "@/services/timeSyncService";
-import { backgroundService } from "@/services/backgroundService";
+import { backgroundService, BackgroundServiceNative } from "@/services/backgroundService";
+import type { BleEventData } from "@/services/backgroundService";
 import { logger } from "@/utils/logger";
 
 export interface UseBleReturn {
@@ -439,61 +440,73 @@ export function useBle(): UseBleReturn {
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return;
 
-    const handleNativeEvent = (event: CustomEvent) => {
+    // Store listener remove functions for cleanup
+    const listenerRemovers: Array<{ remove: () => Promise<void> }> = [];
+
+    const setupNativeListeners = async () => {
       try {
-        const eventName = event.detail?.name || event.type;
-        const eventData = event.detail?.data || {};
+        logger.debug("Setting up native BackgroundService event listeners via Capacitor addListener", "Hook");
 
-        logger.debug(`Native background event received: ${eventName}`, "Hook");
-
-        switch (eventName) {
-          case "bleConnectionStateChanged":
+        // Handler for connection state changes
+        const handleConnectionState = (eventData: BleEventData) => {
+          try {
+            logger.debug(`Native bleConnectionStateChanged event received`, "Hook");
             const connected = eventData.value === true;
             setConnectionState(connected ? "connected" : "disconnected");
             if (connected) {
               timeSyncService.start();
             }
-            break;
+          } catch (error) {
+            logger.error(
+              "Error handling connection state event",
+              "Hook",
+              error instanceof Error ? error : new Error(String(error))
+            );
+          }
+        };
 
-          case "bleAudioData":
+        // Handler for audio data
+        const handleAudioData = (eventData: BleEventData) => {
+          try {
             if (eventData.data) {
-              try {
-                logger.debug(
-                  `Received bleAudioData event: ${eventData.data.length} chars (base64)`,
-                  "Hook"
-                );
+              logger.debug(
+                `Received bleAudioData event: ${eventData.data.length} chars (base64)`,
+                "Hook"
+              );
 
-                const binaryString = atob(eventData.data);
-                const bytes = new Uint8Array(binaryString.length);
-                for (let i = 0; i < binaryString.length; i++) {
-                  bytes[i] = binaryString.charCodeAt(i);
-                }
-                logger.debug(
-                  `Converted to ${bytes.length} bytes, calling processAudio`,
-                  "Hook"
-                );
-
-                processAudio(bytes, "VOICE");
-              } catch (error) {
-                logger.error(
-                  "Error processing native audio data",
-                  "Hook",
-                  error instanceof Error ? error : new Error(String(error))
-                );
-
-                isProcessingRequest.current = false;
-                setIsProcessing(false);
-                setVoiceState("idle");
+              const binaryString = atob(eventData.data);
+              const bytes = new Uint8Array(binaryString.length);
+              for (let i = 0; i < binaryString.length; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
               }
+              logger.debug(
+                `Converted to ${bytes.length} bytes, calling processAudio`,
+                "Hook"
+              );
+
+              processAudio(bytes, "VOICE");
             } else {
               logger.warn(
                 "bleAudioData event received but data is missing",
                 "Hook"
               );
             }
-            break;
+          } catch (error) {
+            logger.error(
+              "Error processing native audio data",
+              "Hook",
+              error instanceof Error ? error : new Error(String(error))
+            );
 
-          case "bleError":
+            isProcessingRequest.current = false;
+            setIsProcessing(false);
+            setVoiceState("idle");
+          }
+        };
+
+        // Handler for errors
+        const handleError = (eventData: BleEventData) => {
+          try {
             const errorMsg = eventData.error || "Unknown BLE error";
             setLastError(errorMsg);
             logger.error(
@@ -501,37 +514,92 @@ export function useBle(): UseBleReturn {
               "Hook",
               new Error(errorMsg)
             );
-            break;
+          } catch (error) {
+            logger.error(
+              "Error handling BLE error event",
+              "Hook",
+              error instanceof Error ? error : new Error(String(error))
+            );
+          }
+        };
+
+        // Register listeners using Capacitor's addListener API
+        // This properly connects to the notifyListeners calls in the native plugin
+        if (BackgroundServiceNative && typeof BackgroundServiceNative.addListener === 'function') {
+          const connectionListener = await BackgroundServiceNative.addListener(
+            "bleConnectionStateChanged",
+            handleConnectionState
+          );
+          listenerRemovers.push(connectionListener);
+          logger.debug("Registered bleConnectionStateChanged listener via Capacitor", "Hook");
+
+          const audioListener = await BackgroundServiceNative.addListener(
+            "bleAudioData",
+            handleAudioData
+          );
+          listenerRemovers.push(audioListener);
+          logger.debug("Registered bleAudioData listener via Capacitor", "Hook");
+
+          const errorListener = await BackgroundServiceNative.addListener(
+            "bleError",
+            handleError
+          );
+          listenerRemovers.push(errorListener);
+          logger.debug("Registered bleError listener via Capacitor", "Hook");
+
+          logger.info("All BackgroundService event listeners registered successfully", "Hook");
+        } else {
+          logger.warn("BackgroundServiceNative.addListener not available, falling back to window events", "Hook");
+          
+          // Fallback to window events for web or if plugin not available
+          const handleNativeEvent = (event: Event) => {
+            const customEvent = event as CustomEvent;
+            const eventName = customEvent.detail?.name || customEvent.type;
+            const eventData = customEvent.detail || {};
+
+            switch (eventName) {
+              case "bleConnectionStateChanged":
+                handleConnectionState(eventData);
+                break;
+              case "bleAudioData":
+                handleAudioData(eventData);
+                break;
+              case "bleError":
+                handleError(eventData);
+                break;
+            }
+          };
+
+          window.addEventListener("bleConnectionStateChanged", handleNativeEvent);
+          window.addEventListener("bleAudioData", handleNativeEvent);
+          window.addEventListener("bleError", handleNativeEvent);
         }
       } catch (error) {
         logger.error(
-          "Error handling native event",
+          "Error setting up native listeners",
           "Hook",
           error instanceof Error ? error : new Error(String(error))
         );
       }
     };
 
-    window.addEventListener(
-      "bleConnectionStateChanged",
-      handleNativeEvent as EventListener
-    );
-    window.addEventListener("bleAudioData", handleNativeEvent as EventListener);
-    window.addEventListener("bleError", handleNativeEvent as EventListener);
+    setupNativeListeners();
 
     return () => {
-      window.removeEventListener(
-        "bleConnectionStateChanged",
-        handleNativeEvent as EventListener
-      );
-      window.removeEventListener(
-        "bleAudioData",
-        handleNativeEvent as EventListener
-      );
-      window.removeEventListener(
-        "bleError",
-        handleNativeEvent as EventListener
-      );
+      // Cleanup: remove all registered listeners
+      listenerRemovers.forEach(async (listener) => {
+        try {
+          await listener.remove();
+        } catch (e) {
+          // Ignore cleanup errors
+        }
+      });
+
+      // Also remove window event listeners if they were used as fallback
+      const noop = () => {};
+      window.removeEventListener("bleConnectionStateChanged", noop);
+      window.removeEventListener("bleAudioData", noop);
+      window.removeEventListener("bleError", noop);
     };
   }, [processAudio]);
 

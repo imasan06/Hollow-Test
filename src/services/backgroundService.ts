@@ -2,6 +2,13 @@ import { Capacitor } from "@capacitor/core";
 import { registerPlugin } from "@capacitor/core";
 import { logger } from "@/utils/logger";
 
+interface BleEventData {
+  name: string;
+  value?: boolean;
+  error?: string;
+  data?: string;
+}
+
 interface BackgroundServicePlugin {
   startService(options?: {
     deviceAddress?: string;
@@ -12,6 +19,11 @@ interface BackgroundServicePlugin {
   }): Promise<{ success: boolean }>;
   disconnectBleDevice(): Promise<{ success: boolean }>;
   isBleConnected(): Promise<{ connected: boolean }>;
+  addListener(
+    eventName: "bleConnectionStateChanged" | "bleAudioData" | "bleError",
+    listenerFunc: (data: BleEventData) => void
+  ): Promise<{ remove: () => Promise<void> }>;
+  removeAllListeners(): Promise<void>;
 }
 
 const BackgroundServiceNative = registerPlugin<BackgroundServicePlugin>(
@@ -30,6 +42,10 @@ logger.debug(
   }`,
   "BackgroundService"
 );
+
+// Export the native plugin for direct event listener access
+export { BackgroundServiceNative };
+export type { BleEventData };
 
 class BackgroundService {
   private isEnabled = false;
