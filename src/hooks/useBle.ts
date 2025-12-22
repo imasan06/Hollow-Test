@@ -109,6 +109,9 @@ export function useBle(): UseBleReturn {
     async (adpcmData: Uint8Array, mode: "VOICE" | "SILENT") => {
       const now = Date.now();
 
+      // Check if in background for different handling
+      const isBackground = document.visibilityState === 'hidden' || (typeof window !== 'undefined' && !document.hasFocus());
+      
       if (isProcessingRequest.current) {
         const timeSinceStart = now - lastAudioProcessedTime.current;
         logger.warn(
@@ -116,9 +119,13 @@ export function useBle(): UseBleReturn {
           "Hook"
         );
 
-        if (timeSinceStart > MAX_PROCESSING_TIME_MS) {
+        // In background: Be more lenient - allow new requests after 30s to prevent blocking
+        // In foreground: Only reset after max timeout (3min)
+        const timeoutThreshold = isBackground ? 30000 : MAX_PROCESSING_TIME_MS;
+        
+        if (timeSinceStart > timeoutThreshold) {
           logger.error(
-            "Processing flag stuck for too long - forcing reset",
+            `Processing flag stuck for too long (${timeSinceStart}ms) - forcing reset`,
             "Hook"
           );
           isProcessingRequest.current = false;
@@ -128,11 +135,24 @@ export function useBle(): UseBleReturn {
             clearTimeout(processingTimeoutRef.current);
             processingTimeoutRef.current = null;
           }
+          // Continue processing this audio after reset
         } else {
-          return;
+          // In background: Log but allow processing if reasonable time has passed (10s)
+          // This prevents permanent blocking in background where requests can queue
+          if (isBackground && timeSinceStart > 10000) {
+            logger.warn(
+              `Background: Previous request taking long (${timeSinceStart}ms), allowing new request`,
+              "Hook"
+            );
+            // Don't block - allow this audio to be processed
+            // The deduplication window will prevent true duplicates
+          } else {
+            return;
+          }
         }
       }
 
+      // Check for duplicate audio (prevent processing same audio twice)
       const timeSinceLastAudio = now - lastAudioProcessedTime.current;
       if (
         timeSinceLastAudio < AUDIO_DEDUP_WINDOW_MS &&
@@ -144,6 +164,10 @@ export function useBle(): UseBleReturn {
         );
         return;
       }
+      
+      // In background: Update lastAudioProcessedTime immediately to prevent duplicates
+      // This ensures we don't process the same audio chunk multiple times
+      lastAudioProcessedTime.current = now;
 
       lastAudioProcessedTime.current = now;
 
@@ -570,9 +594,8 @@ export function useBle(): UseBleReturn {
                   );
                 } catch (error) {
                   logger.warn(
-                    "Failed to connect BLE device to native background service",
-                    "Hook",
-                    error instanceof Error ? error : new Error(String(error))
+                    `Failed to connect BLE device to native background service: ${error instanceof Error ? error.message : String(error)}`,
+                    "Hook"
                   );
                 }
               } else {

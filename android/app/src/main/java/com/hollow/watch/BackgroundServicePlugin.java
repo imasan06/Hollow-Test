@@ -60,26 +60,41 @@ public class BackgroundServicePlugin extends Plugin {
                 }
                 
                 // Enviar evento a JavaScript usando WebView
-                android.webkit.WebView webView = getBridge().getWebView();
-                if (webView != null) {
-                    String jsCode = String.format(
-                        "window.dispatchEvent(new CustomEvent('%s', { detail: %s }));",
-                        eventName,
-                        jsData.toString()
-                    );
-                    
-                    // Usar evaluateJavascript (método de Android WebView)
-                    webView.post(() -> {
-                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.KITKAT) {
-                            webView.evaluateJavascript(jsCode, null);
-                        } else {
-                            // Fallback para versiones antiguas
-                            webView.loadUrl("javascript:" + jsCode);
-                        }
-                    });
-                    Log.d(TAG, "Event sent to JavaScript: " + eventName);
-                } else {
-                    Log.w(TAG, "WebView is null, cannot send event to JavaScript");
+                // OPTIMIZATION: Use bridge.notifyListeners for better background support
+                // This works even when WebView is paused in background
+                try {
+                    // Try using Capacitor's notifyListeners first (better for background)
+                    notifyListeners(eventName, jsData);
+                    Log.d(TAG, "Event sent to JavaScript via notifyListeners: " + eventName);
+                } catch (Exception e) {
+                    // Fallback to WebView if notifyListeners fails
+                    Log.w(TAG, "notifyListeners failed, trying WebView fallback: " + e.getMessage());
+                    android.webkit.WebView webView = getBridge().getWebView();
+                    if (webView != null) {
+                        String jsCode = String.format(
+                            "window.dispatchEvent(new CustomEvent('%s', { detail: %s }));",
+                            eventName,
+                            jsData.toString()
+                        );
+                        
+                        // Use post to ensure it runs on UI thread
+                        // In background, WebView may be paused, but post should still work
+                        webView.post(() -> {
+                            try {
+                                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.KITKAT) {
+                                    webView.evaluateJavascript(jsCode, null);
+                                } else {
+                                    // Fallback para versiones antiguas
+                                    webView.loadUrl("javascript:" + jsCode);
+                                }
+                                Log.d(TAG, "Event sent to JavaScript via WebView: " + eventName);
+                            } catch (Exception ex) {
+                                Log.e(TAG, "Error sending event via WebView: " + ex.getMessage());
+                            }
+                        });
+                    } else {
+                        Log.w(TAG, "WebView is null, cannot send event to JavaScript");
+                    }
                 }
             }
         };
