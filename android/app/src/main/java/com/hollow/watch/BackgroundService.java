@@ -14,7 +14,6 @@ import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Process;
 import androidx.core.app.NotificationCompat;
-import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class BackgroundService extends Service {
@@ -333,12 +332,14 @@ public class BackgroundService extends Service {
     }
     
     /**
-     * Notifica eventos a JavaScript usando LocalBroadcastManager
-     * El plugin escuchará estos broadcasts y los enviará a JavaScript
+     * Notifica eventos a JavaScript usando broadcasts del sistema
+     * Usa broadcasts del sistema en lugar de LocalBroadcastManager porque
+     * el servicio corre en un proceso separado (:background)
      */
     private void notifyJavaScript(String eventName, Object data) {
         try {
             Intent intent = new Intent("com.hollow.watch.BLE_EVENT");
+            intent.setPackage(getPackageName()); // Restrict to our app only for security
             intent.putExtra("eventName", eventName);
             
             if (data instanceof Boolean) {
@@ -351,7 +352,9 @@ public class BackgroundService extends Service {
                 intent.putExtra("data", base64);
             }
             
-            LocalBroadcastManager.getInstance(this).sendBroadcast(intent);
+            // Use system broadcast instead of LocalBroadcastManager
+            // because we run in a separate process (:background)
+            sendBroadcast(intent);
             android.util.Log.d("BackgroundService", "Event broadcast sent: " + eventName);
         } catch (Exception e) {
             android.util.Log.e("BackgroundService", "Error broadcasting event: " + e.getMessage(), e);

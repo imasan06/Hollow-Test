@@ -8,7 +8,6 @@ import android.content.IntentFilter;
 import android.content.ServiceConnection;
 import android.os.IBinder;
 import android.util.Log;
-import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -45,8 +44,13 @@ public class BackgroundServicePlugin extends Plugin {
         bleEventReceiver = new BroadcastReceiver() {
             @Override
             public void onReceive(Context context, Intent intent) {
+                Log.d(TAG, "BroadcastReceiver.onReceive() called");
                 String eventName = intent.getStringExtra("eventName");
-                if (eventName == null) return;
+                if (eventName == null) {
+                    Log.w(TAG, "Received broadcast with null eventName");
+                    return;
+                }
+                Log.d(TAG, "Received event: " + eventName);
                 
                 JSObject jsData = new JSObject();
                 jsData.put("name", eventName);
@@ -100,15 +104,26 @@ public class BackgroundServicePlugin extends Plugin {
         };
         
         IntentFilter filter = new IntentFilter("com.hollow.watch.BLE_EVENT");
-        LocalBroadcastManager.getInstance(getContext()).registerReceiver(bleEventReceiver, filter);
-        Log.d(TAG, "BLE event receiver registered");
+        // Use system broadcast receiver instead of LocalBroadcastManager
+        // because BackgroundService runs in a separate process (:background)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            // Android 13+ requires explicit export flag
+            getContext().registerReceiver(bleEventReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            getContext().registerReceiver(bleEventReceiver, filter);
+        }
+        Log.d(TAG, "BLE event receiver registered (system broadcast)");
     }
     
     @Override
     public void handleOnDestroy() {
         super.handleOnDestroy();
         if (bleEventReceiver != null) {
-            LocalBroadcastManager.getInstance(getContext()).unregisterReceiver(bleEventReceiver);
+            try {
+                getContext().unregisterReceiver(bleEventReceiver);
+            } catch (Exception e) {
+                Log.w(TAG, "Error unregistering receiver: " + e.getMessage());
+            }
             bleEventReceiver = null;
             Log.d(TAG, "BLE event receiver unregistered");
         }
