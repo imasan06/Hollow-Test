@@ -145,9 +145,9 @@ export function ConversationHistory({ messages, className, onMessageDeleted }: C
                 <p 
                   className={cn(
                     'text-sm leading-relaxed whitespace-pre-wrap break-words',
-                    message.role === 'user'
-                      ? 'text-foreground italic'
-                      : 'text-foreground'
+                  message.role === 'user'
+                    ? 'text-foreground italic'
+                    : 'text-foreground'
                   )}
                   style={{ 
                     wordBreak: 'break-word',

@@ -35,7 +35,7 @@ export function ResponseCard({ response, error, className }: ResponseCardProps) 
           <p 
             className={cn(
               'text-sm leading-relaxed whitespace-pre-wrap break-words',
-              error ? 'text-destructive' : 'text-foreground'
+            error ? 'text-destructive' : 'text-foreground'
             )}
             style={{ 
               wordBreak: 'break-word',

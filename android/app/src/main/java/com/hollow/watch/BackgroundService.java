@@ -883,6 +883,32 @@ public class BackgroundService extends Service {
             notifyJavaScriptStatic(context, "bleAudioError", e.getMessage());
         }
     }
+    private static class BackendConfig {
+        String backendToken;
+        String persona;
+        String rules;
+    }
+    
+    private static BackendConfig readBackendConfig(Context context) {
+        SharedPreferences prefs =
+            context.getSharedPreferences("_capacitor_preferences", Context.MODE_PRIVATE);
+    
+        BackendConfig config = new BackendConfig();
+        config.backendToken = prefs.getString("backend_shared_token", "");
+        config.persona = prefs.getString("active_persona", "");
+        config.rules = prefs.getString("active_rules", "");
+    
+        android.util.Log.d(
+            "BackgroundService",
+            "Loaded backend config | persona="
+                + (config.persona != null && !config.persona.isEmpty())
+                + " rules="
+                + (config.rules != null && !config.rules.isEmpty())
+        );
+    
+        return config;
+    }
+    
     
     /**
      * Static helper to notify JavaScript
