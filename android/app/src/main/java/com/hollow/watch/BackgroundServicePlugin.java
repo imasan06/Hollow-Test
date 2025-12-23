@@ -104,15 +104,11 @@ public class BackgroundServicePlugin extends Plugin {
         };
         
         IntentFilter filter = new IntentFilter("com.hollow.watch.BLE_EVENT");
-        // Use system broadcast receiver instead of LocalBroadcastManager
-        // because BackgroundService runs in a separate process (:background)
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-            // Android 13+ requires explicit export flag
-            getContext().registerReceiver(bleEventReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
-        } else {
-            getContext().registerReceiver(bleEventReceiver, filter);
-        }
-        Log.d(TAG, "BLE event receiver registered (system broadcast)");
+        // Use LocalBroadcastManager since service and plugin now run in the same process
+        // This is more efficient and secure than system broadcasts
+        androidx.localbroadcastmanager.content.LocalBroadcastManager.getInstance(getContext())
+            .registerReceiver(bleEventReceiver, filter);
+        Log.d(TAG, "BLE event receiver registered (LocalBroadcast)");
     }
     
     @Override
@@ -120,7 +116,8 @@ public class BackgroundServicePlugin extends Plugin {
         super.handleOnDestroy();
         if (bleEventReceiver != null) {
             try {
-                getContext().unregisterReceiver(bleEventReceiver);
+                androidx.localbroadcastmanager.content.LocalBroadcastManager.getInstance(getContext())
+                    .unregisterReceiver(bleEventReceiver);
             } catch (Exception e) {
                 Log.w(TAG, "Error unregistering receiver: " + e.getMessage());
             }
@@ -304,6 +301,54 @@ public class BackgroundServicePlugin extends Plugin {
         } catch (Exception e) {
             Log.e(TAG, "Exception in stopService: " + e.getMessage(), e);
             call.reject("Failed to stop service: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Test method to simulate the BackgroundService audio flow without a real BLE device.
+     * This sends a fake audio broadcast through the same path as real BLE data.
+     */
+    @PluginMethod
+    public void testAudioFlow(PluginCall call) {
+        Log.d(TAG, "testAudioFlow() called - simulating BLE audio");
+        try {
+            // Generate fake ADPCM audio data (silence/low noise)
+            // Real ADPCM is 4 bits per sample, so 128 bytes = 256 samples
+            // We'll create ~1 second of fake audio (multiple chunks)
+            int chunksToSend = 50; // ~50 chunks like real audio
+            int chunkSize = 128;
+            
+            // Combine all chunks into one buffer (simulating what BackgroundService does)
+            byte[] fakeAudio = new byte[chunksToSend * chunkSize];
+            for (int i = 0; i < fakeAudio.length; i++) {
+                // Generate low-amplitude noise (ADPCM encoded silence-ish)
+                fakeAudio[i] = (byte) ((i % 16) << 4 | ((i + 8) % 16));
+            }
+            
+            Log.d(TAG, "Generated fake audio: " + fakeAudio.length + " bytes");
+            
+            // Convert to base64 (same as BackgroundService does)
+            String base64Audio = android.util.Base64.encodeToString(fakeAudio, android.util.Base64.NO_WRAP);
+            
+            // Create the broadcast intent (same as BackgroundService.notifyJavaScript)
+            Intent intent = new Intent("com.hollow.watch.BLE_EVENT");
+            intent.putExtra("eventName", "bleAudioData");
+            intent.putExtra("data", base64Audio);
+            
+            // Send via LocalBroadcastManager (same path as BackgroundService)
+            androidx.localbroadcastmanager.content.LocalBroadcastManager.getInstance(getContext())
+                .sendBroadcast(intent);
+            
+            Log.d(TAG, "Test audio broadcast sent: " + base64Audio.length() + " chars (base64)");
+            
+            JSObject result = new JSObject();
+            result.put("success", true);
+            result.put("audioSize", fakeAudio.length);
+            result.put("base64Size", base64Audio.length());
+            call.resolve(result);
+        } catch (Exception e) {
+            Log.e(TAG, "Exception in testAudioFlow: " + e.getMessage(), e);
+            call.reject("Failed to test audio flow: " + e.getMessage(), e);
         }
     }
 }

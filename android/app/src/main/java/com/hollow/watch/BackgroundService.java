@@ -339,7 +339,6 @@ public class BackgroundService extends Service {
     private void notifyJavaScript(String eventName, Object data) {
         try {
             Intent intent = new Intent("com.hollow.watch.BLE_EVENT");
-            intent.setPackage(getPackageName()); // Restrict to our app only for security
             intent.putExtra("eventName", eventName);
             
             if (data instanceof Boolean) {
@@ -352,10 +351,10 @@ public class BackgroundService extends Service {
                 intent.putExtra("data", base64);
             }
             
-            // Use system broadcast instead of LocalBroadcastManager
-            // because we run in a separate process (:background)
-            sendBroadcast(intent);
-            android.util.Log.d("BackgroundService", "Event broadcast sent: " + eventName);
+            // Use LocalBroadcastManager since service and plugin now run in the same process
+            // This is more efficient and secure than system broadcasts
+            androidx.localbroadcastmanager.content.LocalBroadcastManager.getInstance(this).sendBroadcast(intent);
+            android.util.Log.d("BackgroundService", "Event broadcast sent (LocalBroadcast): " + eventName);
         } catch (Exception e) {
             android.util.Log.e("BackgroundService", "Error broadcasting event: " + e.getMessage(), e);
         }

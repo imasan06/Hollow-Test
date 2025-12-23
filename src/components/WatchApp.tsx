@@ -16,12 +16,15 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { Bluetooth, BluetoothOff, Watch, Wifi, Settings, Trash2 } from 'lucide-react';
+import { Bluetooth, BluetoothOff, Watch, Wifi, Settings, Trash2, FlaskConical } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { Badge } from '@/components/ui/badge';
 import { APP_CONFIG } from '@/config/app.config';
 import { getConversationHistory, ConversationMessage } from '@/storage/conversationStore';
 import { logger } from '@/utils/logger';
+import { backgroundService } from '@/services/backgroundService';
+import { Capacitor } from '@capacitor/core';
+import { toast } from '@/hooks/use-toast';
 
 
 const ConversationHistory = lazy(() => import('@/components/ui/ConversationHistory').then(m => ({ default: m.ConversationHistory })));
@@ -56,7 +59,49 @@ export function WatchApp() {
   
   const [conversationHistory, setConversationHistory] = useState<ConversationMessage[]>([]);
   const [isClearAllDialogOpen, setIsClearAllDialogOpen] = useState(false);
+  const [isTestingAudio, setIsTestingAudio] = useState(false);
   const wasRecordingRef = useRef(false);
+  
+  // Test BackgroundService audio flow
+  const handleTestBackgroundAudio = async () => {
+    if (!Capacitor.isNativePlatform() || Capacitor.getPlatform() !== 'android') {
+      toast({
+        title: "Not Available",
+        description: "This test only works on Android",
+        variant: "destructive",
+      });
+      return;
+    }
+    
+    setIsTestingAudio(true);
+    try {
+      logger.info("Starting BackgroundService audio test...", "WatchApp");
+      const result = await backgroundService.testAudioFlow();
+      
+      if (result.success) {
+        toast({
+          title: "Test Sent!",
+          description: `Sent ${result.audioSize} bytes of fake audio. Check logs for the flow.`,
+        });
+        logger.info(`Test audio sent successfully: ${result.audioSize} bytes`, "WatchApp");
+      } else {
+        toast({
+          title: "Test Failed",
+          description: "Could not send test audio. Check logs.",
+          variant: "destructive",
+        });
+      }
+    } catch (error) {
+      logger.error("Test audio flow failed", "WatchApp", error instanceof Error ? error : new Error(String(error)));
+      toast({
+        title: "Test Error",
+        description: error instanceof Error ? error.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setIsTestingAudio(false);
+    }
+  };
   
   const isConnected = connectionState === 'connected';
   const isScanning = connectionState === 'scanning' || connectionState === 'connecting';
@@ -322,6 +367,29 @@ export function WatchApp() {
                   </>
                 )}
               </Button>
+
+              {/* Test BackgroundService Flow Button (Android only) */}
+              {Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android' && (
+                <Button
+                  size="lg"
+                  variant="outline"
+                  onClick={handleTestBackgroundAudio}
+                  disabled={isTestingAudio}
+                  className="min-w-[200px] gap-2 border-dashed border-amber-500/50 text-amber-600 hover:bg-amber-500/10"
+                >
+                  {isTestingAudio ? (
+                    <>
+                      <FlaskConical className="h-5 w-5 animate-pulse" />
+                      Sending test...
+                    </>
+                  ) : (
+                    <>
+                      <FlaskConical className="h-5 w-5" />
+                      Test Background Flow
+                    </>
+                  )}
+                </Button>
+              )}
 
               {/* Status Message */}
               <p className="text-center text-sm text-muted-foreground max-w-xs">
