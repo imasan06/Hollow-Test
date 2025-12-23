@@ -16,8 +16,7 @@ public class ApiClient {
     private static final String DEFAULT_API_ENDPOINT = "https://hollow-backend.fly.dev";
     private static final int CONNECT_TIMEOUT_SECONDS = 30;
     private static final int READ_TIMEOUT_SECONDS = 120;
-    private static final int MAX_RETRIES = 3;
-    private static final long RETRY_DELAY_MS = 1000;
+    // No retries - instant execution
     
     private final OkHttpClient httpClient;
     private final String apiEndpoint;
@@ -115,72 +114,46 @@ public class ApiClient {
             int audioSize = audioBase64 != null ? audioBase64.length() : 0;
             Log.d(TAG, "Request payload size: " + payloadSize + " chars (audio: " + audioSize + " chars)");
             
-            // Retry logic for SSL/connection errors
-            Exception lastException = null;
-            for (int attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-                try {
-                    if (attempt > 1) {
-                        Log.d(TAG, "Retry attempt " + attempt + " of " + MAX_RETRIES);
-                        Thread.sleep(RETRY_DELAY_MS * attempt); // Exponential backoff
-                    }
-                    
-                    Log.d(TAG, "Attempting connection (attempt " + attempt + ")...");
-                    long startTime = System.currentTimeMillis();
-                    try (Response response = httpClient.newCall(request).execute()) {
-                        long duration = System.currentTimeMillis() - startTime;
-                        
-                        if (!response.isSuccessful()) {
-                            String errorBody = response.body() != null ? response.body().string() : "Unknown error";
-                            Log.e(TAG, "API request failed: " + response.code() + " - " + errorBody);
-                            return new ChatResponse(null, null, "HTTP " + response.code() + ": " + errorBody);
-                        }
-                        
-                        String responseBody = response.body() != null ? response.body().string() : "{}";
-                        Log.d(TAG, "API response received in " + duration + "ms");
-                        
-                        JSONObject json = new JSONObject(responseBody);
-                        
-                        // Extract response text (try multiple possible keys)
-                        String text = json.optString("reply", null);
-                        if (text == null || text.isEmpty()) {
-                            text = json.optString("answer", null);
-                        }
-                        if (text == null || text.isEmpty()) {
-                            text = json.optString("text", null);
-                        }
-                        if (text == null || text.isEmpty()) {
-                            text = json.optString("response", null);
-                        }
-                        
-                        // Extract transcription
-                        String transcription = json.optString("transcription", null);
-                        if (transcription == null || transcription.isEmpty()) {
-                            transcription = json.optString("transcript", null);
-                        }
-                        
-                        // Extract error if any
-                        String error = json.optString("error", null);
-                        
-                        return new ChatResponse(text, transcription, error);
-                    }
-                } catch (javax.net.ssl.SSLException | java.net.SocketException | java.io.EOFException e) {
-                    lastException = e;
-                    Log.w(TAG, "Connection error on attempt " + attempt + ": " + e.getMessage());
-                    if (attempt < MAX_RETRIES) {
-                        continue; // Retry
-                    }
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    return new ChatResponse(null, null, "Request interrupted");
+            // Execute immediately - no retries, no delays
+            Log.d(TAG, "Attempting connection...");
+            long startTime = System.currentTimeMillis();
+            try (Response response = httpClient.newCall(request).execute()) {
+                long duration = System.currentTimeMillis() - startTime;
+                
+                if (!response.isSuccessful()) {
+                    String errorBody = response.body() != null ? response.body().string() : "Unknown error";
+                    Log.e(TAG, "API request failed: " + response.code() + " - " + errorBody);
+                    return new ChatResponse(null, null, "HTTP " + response.code() + ": " + errorBody);
                 }
+                
+                String responseBody = response.body() != null ? response.body().string() : "{}";
+                Log.d(TAG, "API response received in " + duration + "ms");
+                
+                JSONObject json = new JSONObject(responseBody);
+                
+                // Extract response text (try multiple possible keys)
+                String text = json.optString("reply", null);
+                if (text == null || text.isEmpty()) {
+                    text = json.optString("answer", null);
+                }
+                if (text == null || text.isEmpty()) {
+                    text = json.optString("text", null);
+                }
+                if (text == null || text.isEmpty()) {
+                    text = json.optString("response", null);
+                }
+                
+                // Extract transcription
+                String transcription = json.optString("transcription", null);
+                if (transcription == null || transcription.isEmpty()) {
+                    transcription = json.optString("transcript", null);
+                }
+                
+                // Extract error if any
+                String error = json.optString("error", null);
+                
+                return new ChatResponse(text, transcription, error);
             }
-            
-            // All retries failed
-            if (lastException != null) {
-                throw lastException;
-            }
-            // This should never happen, but compiler needs it
-            return new ChatResponse(null, null, "All retry attempts failed");
         } catch (java.net.SocketTimeoutException e) {
             Log.e(TAG, "Request timeout: " + e.getMessage(), e);
             return new ChatResponse(null, null, "Request timeout: " + e.getMessage());

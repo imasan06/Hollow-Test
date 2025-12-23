@@ -746,69 +746,26 @@ public class BackgroundService extends Service {
             if (contextText == null || contextText.isEmpty()) {
                 android.util.Log.d("BackgroundService", "No context provided, trying to read from SharedPreferences");
                 
-                // CRITICAL: Always get fresh SharedPreferences instance and force disk read
-                // This ensures we get the latest data even after multiple requests
-                SharedPreferences.Editor editor = prefs.edit();
-                editor.apply(); // Force any pending writes to complete
-                
-                // Get fresh instance and force sync
+                // Get fresh instance and force sync - read immediately, no retries
                 prefs = context.getSharedPreferences("_capacitor_preferences", Context.MODE_PRIVATE);
                 java.util.Map<String, ?> allPrefs = prefs.getAll(); // Force disk read
                 
-                // Try reading with more retries and longer waits for background mode
-                // Capacitor Preferences uses apply() which is async, so we need to wait longer
-                String conversationHistoryJson = null;
-                for (int retry = 0; retry < 15; retry++) {
-                    // Always get fresh instance on each retry to avoid stale cache
-                    if (retry > 0) {
-                        prefs = context.getSharedPreferences("_capacitor_preferences", Context.MODE_PRIVATE);
-                        allPrefs = prefs.getAll(); // Force fresh disk read
-                    }
-                    
-                    // Try multiple methods to read the value
-                    conversationHistoryJson = prefs.getString("conversation_history", null);
-                    
-                    // Also try reading from getAll() which forces a sync
-                    if (conversationHistoryJson == null || conversationHistoryJson.isEmpty()) {
-                        if (allPrefs.containsKey("conversation_history")) {
-                            Object historyValue = allPrefs.get("conversation_history");
-                            if (historyValue != null) {
-                                conversationHistoryJson = historyValue.toString();
-                                android.util.Log.d("BackgroundService", "Found conversation_history via getAll() on retry " + retry);
-                            }
-                        }
-                    }
-                    
-                    if (conversationHistoryJson != null && !conversationHistoryJson.isEmpty()) {
-                        android.util.Log.d("BackgroundService", "Found conversation_history on retry " + retry + " (" + conversationHistoryJson.length() + " chars)");
-                        break;
-                    }
-                    
-                    if (retry < 14) {
-                        try {
-                            // Increase wait time progressively: 50ms, 100ms, 150ms, etc.
-                            Thread.sleep(50 + (retry * 50));
-                        } catch (InterruptedException e) {
-                            Thread.currentThread().interrupt();
-                            break;
-                        }
-                    }
-                }
+                // Read immediately - no retries, no delays
+                String conversationHistoryJson = prefs.getString("conversation_history", null);
                 
-                // Debug: Log all keys in SharedPreferences to verify conversation_history exists
+                // Also try reading from getAll() which forces a sync
                 if (conversationHistoryJson == null || conversationHistoryJson.isEmpty()) {
-                    allPrefs = prefs.getAll();
-                    android.util.Log.d("BackgroundService", "All SharedPreferences keys: " + allPrefs.keySet().toString());
                     if (allPrefs.containsKey("conversation_history")) {
                         Object historyValue = allPrefs.get("conversation_history");
-                        android.util.Log.d("BackgroundService", "conversation_history exists but value is: " + (historyValue == null ? "null" : historyValue.getClass().getName() + " = " + historyValue.toString().substring(0, Math.min(100, historyValue.toString().length()))));
-                    } else {
-                        android.util.Log.w("BackgroundService", "conversation_history key NOT FOUND in SharedPreferences after all retries!");
+                        if (historyValue != null) {
+                            conversationHistoryJson = historyValue.toString();
+                            android.util.Log.d("BackgroundService", "Found conversation_history via getAll()");
+                        }
                     }
                 }
                 
                 if (conversationHistoryJson == null) {
-                    android.util.Log.d("BackgroundService", "conversation_history is null in SharedPreferences (after retries)");
+                    android.util.Log.d("BackgroundService", "conversation_history is null in SharedPreferences");
                 } else if (conversationHistoryJson.isEmpty()) {
                     android.util.Log.d("BackgroundService", "conversation_history is empty in SharedPreferences");
                 } else {

@@ -469,39 +469,39 @@ export function useBle(): UseBleReturn {
         const handleAudioData = (eventData: BleEventData) => {
           try {
             if (eventData.data) {
-              logger.debug(
-                `Received bleAudioData event: ${eventData.data.length} chars (base64)`,
-                "Hook"
-              );
+                logger.debug(
+                  `Received bleAudioData event: ${eventData.data.length} chars (base64)`,
+                  "Hook"
+                );
 
-              const binaryString = atob(eventData.data);
-              const bytes = new Uint8Array(binaryString.length);
-              for (let i = 0; i < binaryString.length; i++) {
-                bytes[i] = binaryString.charCodeAt(i);
-              }
-              logger.debug(
-                `Converted to ${bytes.length} bytes, calling processAudio`,
-                "Hook"
-              );
+                const binaryString = atob(eventData.data);
+                const bytes = new Uint8Array(binaryString.length);
+                for (let i = 0; i < binaryString.length; i++) {
+                  bytes[i] = binaryString.charCodeAt(i);
+                }
+                logger.debug(
+                  `Converted to ${bytes.length} bytes, calling processAudio`,
+                  "Hook"
+                );
 
-              processAudio(bytes, "VOICE");
+                processAudio(bytes, "VOICE");
             } else {
               logger.warn(
                 "bleAudioData event received but data is missing",
                 "Hook"
               );
             }
-          } catch (error) {
-            logger.error(
-              "Error processing native audio data",
-              "Hook",
-              error instanceof Error ? error : new Error(String(error))
-            );
+              } catch (error) {
+                logger.error(
+                  "Error processing native audio data",
+                  "Hook",
+                  error instanceof Error ? error : new Error(String(error))
+                );
 
-            isProcessingRequest.current = false;
-            setIsProcessing(false);
-            setVoiceState("idle");
-          }
+                isProcessingRequest.current = false;
+                setIsProcessing(false);
+                setVoiceState("idle");
+              }
         };
 
         // Handler for errors
@@ -514,34 +514,34 @@ export function useBle(): UseBleReturn {
               "Hook",
               new Error(errorMsg)
             );
-          } catch (error) {
-            logger.error(
+      } catch (error) {
+        logger.error(
               "Error handling BLE error event",
-              "Hook",
-              error instanceof Error ? error : new Error(String(error))
-            );
-          }
-        };
+          "Hook",
+          error instanceof Error ? error : new Error(String(error))
+        );
+      }
+    };
 
         // Register listeners using Capacitor's addListener API
         // This properly connects to the notifyListeners calls in the native plugin
         if (BackgroundServiceNative && typeof BackgroundServiceNative.addListener === 'function') {
           const connectionListener = await BackgroundServiceNative.addListener(
-            "bleConnectionStateChanged",
+      "bleConnectionStateChanged",
             handleConnectionState
           );
           listenerRemovers.push(connectionListener);
           logger.debug("Registered bleConnectionStateChanged listener via Capacitor", "Hook");
 
           const audioListener = await BackgroundServiceNative.addListener(
-            "bleAudioData",
+        "bleAudioData",
             handleAudioData
-          );
+      );
           listenerRemovers.push(audioListener);
           logger.debug("Registered bleAudioData listener via Capacitor", "Hook");
 
           const errorListener = await BackgroundServiceNative.addListener(
-            "bleError",
+        "bleError",
             handleError
           );
           listenerRemovers.push(errorListener);

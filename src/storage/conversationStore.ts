@@ -46,109 +46,78 @@ export async function getConversationHistory(): Promise<ConversationMessage[]> {
   }
 }
 
-let isWriting = false;
-const writeQueue: Array<() => Promise<void>> = [];
-
-async function processWriteQueue(): Promise<void> {
-  if (isWriting || writeQueue.length === 0) {
-    return;
-  }
-
-  isWriting = true;
-  while (writeQueue.length > 0) {
-    const writeFn = writeQueue.shift();
-    if (writeFn) {
-      try {
-        await writeFn();
-      } catch (error) {
-        logger.error(
-          "Error in write queue",
-          "Storage",
-          error instanceof Error ? error : new Error(String(error))
-        );
-      }
-    }
-  }
-  isWriting = false;
-}
+let writeLock: Promise<void> = Promise.resolve();
 
 export async function appendMessage(
   message: ConversationMessage
 ): Promise<void> {
-  return new Promise((resolve, reject) => {
-    writeQueue.push(async () => {
-      try {
-        const history = await getConversationHistory();
+  writeLock = writeLock.then(async () => {
+    try {
+      const history = await getConversationHistory();
 
-        // Get the latest timestamp from history to ensure chronological order
-        const latestTimestamp = history.length > 0 
-          ? Math.max(...history.map(msg => msg.timestamp))
-          : 0;
+      // Get the latest timestamp from history to ensure chronological order
+      const latestTimestamp = history.length > 0 
+        ? Math.max(...history.map(msg => msg.timestamp))
+        : 0;
 
-        // Ensure new message has a timestamp greater than the latest one
-        // This guarantees chronological order: user message -> assistant response
-        const baseTimestamp = message.timestamp || Date.now();
-        const newTimestamp = baseTimestamp > latestTimestamp 
-          ? baseTimestamp 
-          : latestTimestamp + 1; // Add 1ms to ensure it's after the latest message
+      // Ensure new message has a timestamp greater than the latest one
+      // This guarantees chronological order: user message -> assistant response
+      const baseTimestamp = message.timestamp || Date.now();
+      const newTimestamp = baseTimestamp > latestTimestamp 
+        ? baseTimestamp 
+        : latestTimestamp + 1; // Add 1ms to ensure it's after the latest message
 
-        const newMessage = {
-          role: message.role,
-          text: message.text.trim(),
-          timestamp: newTimestamp,
-        };
+      const newMessage = {
+        role: message.role,
+        text: message.text.trim(),
+        timestamp: newTimestamp,
+      };
 
-        const isDuplicate = history.some(
-          (msg) =>
-            msg.timestamp === newMessage.timestamp &&
-            msg.role === newMessage.role &&
-            msg.text === newMessage.text
-        );
+      const isDuplicate = history.some(
+        (msg) =>
+          msg.timestamp === newMessage.timestamp &&
+          msg.role === newMessage.role &&
+          msg.text === newMessage.text
+      );
 
-        if (isDuplicate) {
-          logger.debug(
-            `Skipping duplicate message with timestamp ${newMessage.timestamp}`,
-            "Storage"
-          );
-          resolve();
-          return;
-        }
-
-        history.push(newMessage);
-
-        // Sort by timestamp to ensure chronological order
-        history.sort((a, b) => a.timestamp - b.timestamp);
-
-        const limitedHistory = history.slice(-MAX_CONVERSATION_TURNS);
-
-        await Preferences.set({
-          key: CONVERSATION_STORAGE_KEY,
-          value: JSON.stringify(limitedHistory),
-        });
-
+      if (isDuplicate) {
         logger.debug(
-          `Saved ${message.role} message: "${newMessage.text.substring(
-            0,
-            50
-          )}..." at timestamp ${newMessage.timestamp}. Total turns: ${limitedHistory.length}`,
+          `Skipping duplicate message with timestamp ${newMessage.timestamp}`,
           "Storage"
         );
-
-        await new Promise((resolve) => setTimeout(resolve, 50));
-
-        resolve();
-      } catch (error) {
-        logger.error(
-          "Error saving message",
-          "Storage",
-          error instanceof Error ? error : new Error(String(error))
-        );
-        reject(error);
+        return;
       }
-    });
 
-    processWriteQueue();
+      history.push(newMessage);
+
+      // Sort by timestamp to ensure chronological order
+      history.sort((a, b) => a.timestamp - b.timestamp);
+
+      const limitedHistory = history.slice(-MAX_CONVERSATION_TURNS);
+
+      await Preferences.set({
+        key: CONVERSATION_STORAGE_KEY,
+        value: JSON.stringify(limitedHistory),
+      });
+
+      logger.debug(
+        `Saved ${message.role} message: "${newMessage.text.substring(
+          0,
+          50
+        )}..." at timestamp ${newMessage.timestamp}. Total turns: ${limitedHistory.length}`,
+        "Storage"
+      );
+    } catch (error) {
+      logger.error(
+        "Error saving message",
+        "Storage",
+        error instanceof Error ? error : new Error(String(error))
+      );
+      throw error;
+    }
   });
+  
+  return writeLock;
 }
 
 export async function getLastTurns(
@@ -159,63 +128,55 @@ export async function getLastTurns(
 }
 
 export async function clearConversationHistory(): Promise<void> {
-  return new Promise((resolve, reject) => {
-    writeQueue.push(async () => {
-      try {
-        await Preferences.remove({ key: CONVERSATION_STORAGE_KEY });
-        logger.debug(
-          "Conversation history cleared (persistent context preserved)",
-          "Storage"
-        );
-        resolve();
-      } catch (error) {
-        logger.error(
-          "Error clearing history",
-          "Storage",
-          error instanceof Error ? error : new Error(String(error))
-        );
-        reject(error);
-      }
-    });
-
-    processWriteQueue();
+  writeLock = writeLock.then(async () => {
+    try {
+      await Preferences.remove({ key: CONVERSATION_STORAGE_KEY });
+      logger.debug(
+        "Conversation history cleared (persistent context preserved)",
+        "Storage"
+      );
+    } catch (error) {
+      logger.error(
+        "Error clearing history",
+        "Storage",
+        error instanceof Error ? error : new Error(String(error))
+      );
+      throw error;
+    }
   });
+  
+  return writeLock;
 }
 
 export async function deleteMessage(timestamp: number): Promise<boolean> {
-  return new Promise((resolve, reject) => {
-    writeQueue.push(async () => {
-      try {
-        const history = await getConversationHistory();
-        const filtered = history.filter((msg) => msg.timestamp !== timestamp);
+  return writeLock.then(async () => {
+    try {
+      const history = await getConversationHistory();
+      const filtered = history.filter((msg) => msg.timestamp !== timestamp);
 
-        if (filtered.length === history.length) {
-          logger.warn("Message not found for deletion", "Storage");
-          resolve(false);
-          return;
-        }
-
-        await Preferences.set({
-          key: CONVERSATION_STORAGE_KEY,
-          value: JSON.stringify(filtered),
-        });
-
-        logger.debug(
-          `Deleted message with timestamp ${timestamp}. Remaining messages: ${filtered.length}`,
-          "Storage"
-        );
-        resolve(true);
-      } catch (error) {
-        logger.error(
-          "Error deleting message",
-          "Storage",
-          error instanceof Error ? error : new Error(String(error))
-        );
-        reject(error);
+      if (filtered.length === history.length) {
+        logger.warn("Message not found for deletion", "Storage");
+        return false;
       }
-    });
 
-    processWriteQueue();
+      await Preferences.set({
+        key: CONVERSATION_STORAGE_KEY,
+        value: JSON.stringify(filtered),
+      });
+
+      logger.debug(
+        `Deleted message with timestamp ${timestamp}. Remaining messages: ${filtered.length}`,
+        "Storage"
+      );
+      return true;
+    } catch (error) {
+      logger.error(
+        "Error deleting message",
+        "Storage",
+        error instanceof Error ? error : new Error(String(error))
+      );
+      throw error;
+    }
   });
 }
 

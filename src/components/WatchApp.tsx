@@ -133,23 +133,19 @@ export function WatchApp() {
       return;
     }
 
-   
-    const debounceTime = force ? 50 : 100;
-    loadHistoryRef.current = new Promise((resolve) => {
-      loadHistoryTimeoutRef.current = window.setTimeout(async () => {
-        try {
-          const history = await getConversationHistory();
-         
-          const sorted = history.sort((a, b) => a.timestamp - b.timestamp);
-          setConversationHistory(sorted);
-        } catch (error) {
-          logger.error('Failed to load conversation history', 'WatchApp', error instanceof Error ? error : new Error(String(error)));
-        } finally {
-          loadHistoryRef.current = null;
-          resolve();
-        }
-      }, debounceTime);
-    });
+    // Load immediately - no debounce, no delays
+    loadHistoryRef.current = (async () => {
+      try {
+        const history = await getConversationHistory();
+       
+        const sorted = history.sort((a, b) => a.timestamp - b.timestamp);
+        setConversationHistory(sorted);
+      } catch (error) {
+        logger.error('Failed to load conversation history', 'WatchApp', error instanceof Error ? error : new Error(String(error)));
+      } finally {
+        loadHistoryRef.current = null;
+      }
+    })();
 
     await loadHistoryRef.current;
   }, []);
@@ -167,12 +163,8 @@ export function WatchApp() {
 
   
   useEffect(() => {
-   
-    const timeoutId = setTimeout(() => {
-      loadHistory(false);
-    }, 250);
-    
-    return () => clearTimeout(timeoutId);
+    // Load immediately - no delay
+    loadHistory(false);
   }, [lastResponse, lastTranscription, recordingResponse, recordingTranscription, loadHistory]);
 
   
@@ -183,11 +175,10 @@ export function WatchApp() {
  
   useEffect(() => {
     if (mainScrollRef.current && (conversationHistory.length > 0 || lastResponse || lastTranscription || recordingResponse || recordingTranscription)) {
-      
-      setTimeout(() => {
-        if (mainScrollRef.current && !isUserScrollingRef.current) {
-          const container = mainScrollRef.current;
-          const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 150;
+      // Scroll immediately - no delay
+      if (mainScrollRef.current && !isUserScrollingRef.current) {
+        const container = mainScrollRef.current;
+        const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 150;
           
           
           requestAnimationFrame(() => {
@@ -199,7 +190,6 @@ export function WatchApp() {
             }
           });
         }
-      }, 150); 
     }
   }, [conversationHistory, lastResponse, lastTranscription, recordingResponse, recordingTranscription]);
 
@@ -217,10 +207,8 @@ export function WatchApp() {
         clearTimeout(scrollTimeoutRef.current);
       }
       
-      
-      scrollTimeoutRef.current = window.setTimeout(() => {
-        isUserScrollingRef.current = false;
-      }, 1000);
+      // Reset immediately - no delay
+      isUserScrollingRef.current = false;
     }
   };
 
@@ -239,8 +227,7 @@ export function WatchApp() {
       
       setConversationHistory([]);
       
-      await new Promise(resolve => setTimeout(resolve, 200));
-      
+      // Load immediately - no delay
       await loadHistory(true);
     } catch (error) {
       logger.error('Error clearing history', 'WatchApp', error instanceof Error ? error : new Error(String(error)));
