@@ -309,8 +309,41 @@ public class BackgroundServicePlugin extends Plugin {
      * This sends a fake audio broadcast through the same path as real BLE data.
      */
     @PluginMethod
+    public void setBackendConfig(PluginCall call) {
+        Log.d(TAG, "setBackendConfig() called");
+        try {
+            String backendToken = call.getString("backendToken");
+            String persona = call.getString("persona");
+            String rules = call.getString("rules");
+            
+            android.content.SharedPreferences prefs = getContext().getSharedPreferences("_capacitor_preferences", android.content.Context.MODE_PRIVATE);
+            android.content.SharedPreferences.Editor editor = prefs.edit();
+            
+            if (backendToken != null && !backendToken.isEmpty()) {
+                editor.putString("backend_shared_token", backendToken);
+                Log.d(TAG, "Backend token saved");
+            }
+            if (persona != null) {
+                editor.putString("active_persona", persona);
+            }
+            if (rules != null) {
+                editor.putString("active_rules", rules);
+            }
+            
+            editor.apply();
+            
+            JSObject result = new JSObject();
+            result.put("success", true);
+            call.resolve(result);
+        } catch (Exception e) {
+            Log.e(TAG, "Exception in setBackendConfig: " + e.getMessage(), e);
+            call.reject("Failed to set backend config: " + e.getMessage(), e);
+        }
+    }
+    
+    @PluginMethod
     public void testAudioFlow(PluginCall call) {
-        Log.d(TAG, "testAudioFlow() called - simulating BLE audio");
+        Log.d(TAG, "testAudioFlow() called - simulating BLE audio with native processing");
         try {
             // Generate fake ADPCM audio data (silence/low noise)
             // Real ADPCM is 4 bits per sample, so 128 bytes = 256 samples
@@ -327,29 +360,62 @@ public class BackgroundServicePlugin extends Plugin {
             
             Log.d(TAG, "Generated fake audio: " + fakeAudio.length + " bytes");
             
-            // Convert to base64 (same as BackgroundService does)
-            String base64Audio = android.util.Base64.encodeToString(fakeAudio, android.util.Base64.NO_WRAP);
-            
-            // Create the broadcast intent (same as BackgroundService.notifyJavaScript)
-            Intent intent = new Intent("com.hollow.watch.BLE_EVENT");
-            intent.putExtra("eventName", "bleAudioData");
-            intent.putExtra("data", base64Audio);
-            
-            // Send via LocalBroadcastManager (same path as BackgroundService)
-            androidx.localbroadcastmanager.content.LocalBroadcastManager.getInstance(getContext())
-                .sendBroadcast(intent);
-            
-            Log.d(TAG, "Test audio broadcast sent: " + base64Audio.length() + " chars (base64)");
+            // Process natively (same as real BLE audio)
+            processAudioNative(fakeAudio);
             
             JSObject result = new JSObject();
             result.put("success", true);
             result.put("audioSize", fakeAudio.length);
-            result.put("base64Size", base64Audio.length());
             call.resolve(result);
         } catch (Exception e) {
             Log.e(TAG, "Exception in testAudioFlow: " + e.getMessage(), e);
             call.reject("Failed to test audio flow: " + e.getMessage(), e);
         }
+    }
+    
+    @PluginMethod
+    public void processAudioNative(PluginCall call) {
+        Log.d(TAG, "processAudioNative() called");
+        try {
+            String wavBase64 = call.getString("wavBase64");
+            if (wavBase64 == null || wavBase64.isEmpty()) {
+                call.reject("wavBase64 is required");
+                return;
+            }
+            
+            // Process WAV directly (no need to convert to ADPCM)
+            BackgroundService.processWavBase64Native(getContext(), wavBase64);
+            
+            JSObject result = new JSObject();
+            result.put("success", true);
+            call.resolve(result);
+        } catch (Exception e) {
+            Log.e(TAG, "Exception in processAudioNative: " + e.getMessage(), e);
+            call.reject("Failed to process audio: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Process audio natively (same method used by BackgroundService)
+     */
+    private void processAudioNative(byte[] adpcmData) {
+        // Get BackgroundService instance to process audio
+        android.content.Context context = getContext();
+        if (context == null) {
+            Log.e(TAG, "Context is null, cannot process audio");
+            return;
+        }
+        
+        // Start BackgroundService if not already running
+        Intent serviceIntent = new Intent(context, BackgroundService.class);
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            context.startForegroundService(serviceIntent);
+        } else {
+            context.startService(serviceIntent);
+        }
+        
+        // Process ADPCM audio natively
+        BackgroundService.processAdpcmNativeStatic(context, adpcmData);
     }
 }
 

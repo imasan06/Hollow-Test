@@ -19,7 +19,7 @@ let cachedActivePreset: {
 let presetCacheTime = 0;
 const PRESET_CACHE_TTL = 30000;
 
-function getBackendSharedToken(): string | null {
+export function getBackendSharedToken(): string | null {
   if (cachedBackendToken) return cachedBackendToken;
 
   if (typeof import.meta !== "undefined" && import.meta.env) {

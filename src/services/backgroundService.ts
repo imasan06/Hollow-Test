@@ -26,6 +26,16 @@ interface BackgroundServicePlugin {
   removeAllListeners(): Promise<void>;
   /** Test method to simulate BLE audio flow without a real device */
   testAudioFlow(): Promise<{ success: boolean; audioSize: number; base64Size: number }>;
+  /** Set backend configuration (token, persona, rules) for native processing */
+  setBackendConfig(options: {
+    backendToken?: string;
+    persona?: string;
+    rules?: string;
+  }): Promise<{ success: boolean }>;
+  /** Process WAV audio natively (for recorded audio) */
+  processAudioNative(options: {
+    wavBase64: string;
+  }): Promise<{ success: boolean }>;
 }
 
 const BackgroundServiceNative = registerPlugin<BackgroundServicePlugin>(
@@ -417,6 +427,72 @@ class BackgroundService {
       }
     }
     logger.warn("testAudioFlow only available on Android", "BackgroundService");
+    return { success: false };
+  }
+
+  /**
+   * Set backend configuration for native audio processing
+   * This must be called before native processing can work
+   */
+  async setBackendConfig(options: {
+    backendToken?: string;
+    persona?: string;
+    rules?: string;
+  }): Promise<{ success: boolean }> {
+    if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android") {
+      try {
+        if (
+          BackgroundServiceNative &&
+          typeof BackgroundServiceNative.setBackendConfig === "function"
+        ) {
+          const result = await BackgroundServiceNative.setBackendConfig(options);
+          logger.debug("Backend config set successfully", "BackgroundService");
+          return result;
+        } else {
+          logger.warn("setBackendConfig not available", "BackgroundService");
+          return { success: false };
+        }
+      } catch (error) {
+        logger.error(
+          "Failed to set backend config",
+          "BackgroundService",
+          error instanceof Error ? error : new Error(String(error))
+        );
+        return { success: false };
+      }
+    }
+    return { success: false };
+  }
+
+  /**
+   * Process WAV audio natively (for recorded audio)
+   */
+  async processAudioNative(wavBase64: string): Promise<{ success: boolean }> {
+    if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android") {
+      try {
+        if (
+          BackgroundServiceNative &&
+          typeof BackgroundServiceNative.processAudioNative === "function"
+        ) {
+          logger.info("Processing audio natively...", "BackgroundService");
+          const result = await BackgroundServiceNative.processAudioNative({
+            wavBase64,
+          });
+          logger.debug("Native audio processing initiated", "BackgroundService");
+          return result;
+        } else {
+          logger.warn("processAudioNative not available", "BackgroundService");
+          return { success: false };
+        }
+      } catch (error) {
+        logger.error(
+          "Failed to process audio natively",
+          "BackgroundService",
+          error instanceof Error ? error : new Error(String(error))
+        );
+        return { success: false };
+      }
+    }
     return { success: false };
   }
 }

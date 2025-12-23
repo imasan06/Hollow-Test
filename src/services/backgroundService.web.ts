@@ -46,4 +46,14 @@ export class BackgroundServiceWeb {
     console.log("[BackgroundService.web] testAudioFlow not available on web");
     return { success: false, audioSize: 0, base64Size: 0 };
   }
+
+  async setBackendConfig(): Promise<{ success: boolean }> {
+    console.log("[BackgroundService.web] setBackendConfig not available on web");
+    return { success: false };
+  }
+
+  async processAudioNative(): Promise<{ success: boolean }> {
+    console.log("[BackgroundService.web] processAudioNative not available on web");
+    return { success: false };
+  }
 }

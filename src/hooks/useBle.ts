@@ -547,6 +547,87 @@ export function useBle(): UseBleReturn {
           listenerRemovers.push(errorListener);
           logger.debug("Registered bleError listener via Capacitor", "Hook");
 
+          // Register listeners for native processing results
+          const processedListener = await BackgroundServiceNative.addListener(
+            "bleAudioProcessed",
+            (eventData: BleEventData) => {
+              try {
+                const response = eventData.data;
+                if (response) {
+                  setLastResponse(response);
+                  logger.debug("Native processing response received", "Hook");
+                  appendMessage({
+                    role: "assistant",
+                    text: response,
+                    timestamp: Date.now(),
+                  }).catch((err) => {
+                    logger.error("Failed to save response", "Hook", err);
+                  });
+                }
+              } catch (error) {
+                logger.error(
+                  "Error handling processed audio event",
+                  "Hook",
+                  error instanceof Error ? error : new Error(String(error))
+                );
+              }
+            }
+          );
+          listenerRemovers.push(processedListener);
+          logger.debug("Registered bleAudioProcessed listener via Capacitor", "Hook");
+
+          const transcriptionListener = await BackgroundServiceNative.addListener(
+            "bleTranscription",
+            (eventData: BleEventData) => {
+              try {
+                const transcription = eventData.data;
+                if (transcription) {
+                  setLastTranscription(transcription);
+                  logger.debug("Native processing transcription received", "Hook");
+                  appendMessage({
+                    role: "user",
+                    text: transcription,
+                    timestamp: Date.now(),
+                  }).catch((err) => {
+                    logger.error("Failed to save transcription", "Hook", err);
+                  });
+                }
+              } catch (error) {
+                logger.error(
+                  "Error handling transcription event",
+                  "Hook",
+                  error instanceof Error ? error : new Error(String(error))
+                );
+              }
+            }
+          );
+          listenerRemovers.push(transcriptionListener);
+          logger.debug("Registered bleTranscription listener via Capacitor", "Hook");
+
+          const audioErrorListener = await BackgroundServiceNative.addListener(
+            "bleAudioError",
+            (eventData: BleEventData) => {
+              try {
+                const errorMsg = eventData.data || "Unknown error";
+                setLastError(errorMsg);
+                logger.error("Native processing error", "Hook", new Error(errorMsg));
+                toast({
+                  title: "Processing Error",
+                  description: errorMsg,
+                  variant: "destructive",
+                });
+              } catch (error) {
+                logger.error(
+                  "Error handling audio error event",
+                  "Hook",
+                  error instanceof Error ? error : new Error(String(error))
+                );
+              }
+            }
+          );
+          listenerRemovers.push(audioErrorListener);
+          logger.debug("Registered bleAudioError listener via Capacitor", "Hook");
+
           logger.info("All BackgroundService event listeners registered successfully", "Hook");
         } else {
           logger.warn("BackgroundServiceNative.addListener not available, falling back to window events", "Hook");

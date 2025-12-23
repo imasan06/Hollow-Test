@@ -10,6 +10,8 @@ import {
   formatConversationContext,
 } from "@/storage/conversationStore";
 import { logger } from "@/utils/logger";
+import { Capacitor } from "@capacitor/core";
+import { backgroundService, BackgroundServiceNative } from "@/services/backgroundService";
 import { APP_CONFIG } from "@/config/app.config";
 import { toast } from "@/hooks/use-toast";
 
@@ -238,8 +240,80 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
       const wavBase64 = await convertBlobToWav(audioBlob);
       recordedAudioRef.current = wavBase64;
 
+      // Use native processing on Android
+      if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android") {
+        logger.debug("Using native audio processing", "AudioRecorder");
+        
+        // Set up listeners for native processing results
+        const processedListener = await BackgroundServiceNative?.addListener(
+          "bleAudioProcessed",
+          (eventData: any) => {
+            const response = eventData.data;
+            if (response) {
+              setLastResponse(response);
+              appendMessage({
+                role: "assistant",
+                text: response,
+                timestamp: Date.now(),
+              }).catch((err) => {
+                logger.error("Failed to save response", "AudioRecorder", err);
+              });
+            }
+          }
+        );
+
+        const transcriptionListener = await BackgroundServiceNative?.addListener(
+          "bleTranscription",
+          (eventData: any) => {
+            const transcription = eventData.data;
+            if (transcription) {
+              setLastTranscription(transcription);
+              appendMessage({
+                role: "user",
+                text: transcription,
+                timestamp: Date.now(),
+              }).catch((err) => {
+                logger.error("Failed to save transcription", "AudioRecorder", err);
+              });
+            }
+          }
+        );
+
+        const errorListener = await BackgroundServiceNative?.addListener(
+          "bleAudioError",
+          (eventData: any) => {
+            const errorMsg = eventData.data || "Unknown error";
+            setError(errorMsg);
+            toast({
+              title: "Processing Error",
+              description: errorMsg,
+              variant: "destructive",
+            });
+            setIsProcessing(false);
+          }
+        );
+
+        // Process natively
+        const result = await backgroundService.processAudioNative(wavBase64);
+        if (!result.success) {
+          throw new Error("Native processing failed");
+        }
+
+        // Clean up listeners after a timeout (processing should complete quickly)
+        setTimeout(() => {
+          processedListener?.remove();
+          transcriptionListener?.remove();
+          errorListener?.remove();
+        }, 30000); // 30 seconds timeout
+
+        logger.debug("Native processing initiated", "AudioRecorder");
+        // Don't set isProcessing to false here - wait for the result events
+        return;
+      }
+
+      // Fallback to JavaScript processing (web or if native fails)
       logger.debug(
-        "Sending audio to backend for transcription and chat...",
+        "Using JavaScript audio processing",
         "AudioRecorder"
       );
 

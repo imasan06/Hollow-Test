@@ -5,6 +5,7 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
 import android.os.IBinder;
@@ -15,6 +16,7 @@ import android.os.HandlerThread;
 import android.os.Process;
 import androidx.core.app.NotificationCompat;
 import java.util.concurrent.atomic.AtomicBoolean;
+import android.content.SharedPreferences;
 
 public class BackgroundService extends Service {
     private static final String CHANNEL_ID = "HollowWatchBackgroundChannel";
@@ -283,10 +285,18 @@ public class BackgroundService extends Service {
                     }
                     
                     if (message.equals(PROTOCOL_END)) {
-                        android.util.Log.d("BackgroundService", "END received - processing buffered audio");
+                        android.util.Log.d("BackgroundService", "END received - processing buffered audio natively");
                         
                         if (audioBuffer.isEmpty()) {
                             android.util.Log.w("BackgroundService", "END received but no audio buffered");
+                            isVoiceMode = false;
+                            return;
+                        }
+                        
+                        // Prevent concurrent processing
+                        if (!isProcessingAudio.compareAndSet(false, true)) {
+                            android.util.Log.w("BackgroundService", "Audio processing already in progress, skipping");
+                            audioBuffer.clear();
                             isVoiceMode = false;
                             return;
                         }
@@ -304,14 +314,14 @@ public class BackgroundService extends Service {
                             offset += chunk.length;
                         }
                         
-                        android.util.Log.d("BackgroundService", "Sending complete audio to JavaScript: " + mergedAudio.length + " bytes from " + audioBuffer.size() + " chunks");
+                        android.util.Log.d("BackgroundService", "Processing audio natively: " + mergedAudio.length + " bytes from " + audioBuffer.size() + " chunks");
                         
                         // Clear buffer and reset state
                         audioBuffer.clear();
                         isVoiceMode = false;
                         
-                        // Send complete audio to JavaScript
-                        notifyJavaScript("bleAudioData", mergedAudio);
+                        // Process audio completely in native (background-safe)
+                        processAudioNative(mergedAudio);
                         return;
                     }
                 }
@@ -410,6 +420,169 @@ public class BackgroundService extends Service {
             bleManager.sendData(data);
         }
     }
+    
+    /**
+     * Process audio completely in native - no JavaScript dependency
+     * This works even when the app is in background/Doze mode
+     */
+    private void processAudioNative(byte[] adpcmData) {
+        // Run in background thread to avoid blocking BLE handler
+        new Thread(() -> {
+            try {
+                android.util.Log.d("BackgroundService", "Starting native audio processing pipeline");
+                long startTime = System.currentTimeMillis();
+                
+                // Step 1: Decode ADPCM to PCM
+                android.util.Log.d("BackgroundService", "Decoding ADPCM to PCM...");
+                ImaAdpcmDecoder.DecodeResult decodeResult = ImaAdpcmDecoder.decode(adpcmData, null);
+                short[] pcmSamples = decodeResult.samples;
+                android.util.Log.d("BackgroundService", "Decoded to " + pcmSamples.length + " PCM samples");
+                
+                // Step 2: Encode PCM to WAV Base64
+                android.util.Log.d("BackgroundService", "Encoding PCM to WAV Base64...");
+                String wavBase64 = WavEncoder.encodeToBase64(pcmSamples);
+                android.util.Log.d("BackgroundService", "WAV encoded: " + wavBase64.length() + " chars (base64)");
+                
+                long audioProcessingTime = System.currentTimeMillis() - startTime;
+                android.util.Log.d("BackgroundService", "Audio processing took " + audioProcessingTime + "ms");
+                
+                // Step 3: Get configuration from SharedPreferences
+                String userId = getUserId();
+                String backendToken = getBackendToken();
+                String persona = getPersona();
+                String rules = getRules();
+                
+                if (backendToken == null || backendToken.isEmpty()) {
+                    android.util.Log.e("BackgroundService", "Backend token not found - cannot process audio");
+                    isProcessingAudio.set(false);
+                    return;
+                }
+                
+                // Step 4: Make HTTP request to backend
+                android.util.Log.d("BackgroundService", "Sending request to backend API...");
+                long apiStartTime = System.currentTimeMillis();
+                
+                ApiClient apiClient = new ApiClient(backendToken);
+                ApiClient.ChatResponse response = apiClient.sendAudioRequest(
+                    wavBase64,
+                    userId,
+                    persona,
+                    rules,
+                    null // context - can be added later if needed
+                );
+                
+                long apiTime = System.currentTimeMillis() - apiStartTime;
+                android.util.Log.d("BackgroundService", "API request took " + apiTime + "ms");
+                
+                // Step 5: Send response to watch via BLE
+                if (response.error != null && !response.error.isEmpty()) {
+                    android.util.Log.e("BackgroundService", "API error: " + response.error);
+                    isProcessingAudio.set(false);
+                    return;
+                }
+                
+                if (response.text == null || response.text.isEmpty()) {
+                    android.util.Log.w("BackgroundService", "API returned empty response");
+                    isProcessingAudio.set(false);
+                    return;
+                }
+                
+                android.util.Log.d("BackgroundService", "Sending response to watch: " + response.text.substring(0, Math.min(50, response.text.length())) + "...");
+                
+                // Send text response to watch via BLE
+                if (bleManager != null && bleManager.isConnected()) {
+                    byte[] responseBytes = response.text.getBytes("UTF-8");
+                    boolean sent = bleManager.sendData(responseBytes);
+                    if (sent) {
+                        android.util.Log.d("BackgroundService", "Response sent to watch successfully");
+                    } else {
+                        android.util.Log.e("BackgroundService", "Failed to send response to watch");
+                    }
+                } else {
+                    android.util.Log.w("BackgroundService", "BLE not connected, cannot send response");
+                }
+                
+                long totalTime = System.currentTimeMillis() - startTime;
+                android.util.Log.d("BackgroundService", "Complete native processing took " + totalTime + "ms");
+                
+                // Notify JavaScript (optional - for UI updates)
+                notifyJavaScript("bleAudioProcessed", response.text);
+                
+            } catch (Exception e) {
+                android.util.Log.e("BackgroundService", "Error in native audio processing: " + e.getMessage(), e);
+            } finally {
+                isProcessingAudio.set(false);
+            }
+        }).start();
+    }
+    
+    /**
+     * Get user ID from SharedPreferences (Capacitor Preferences)
+     */
+    private String getUserId() {
+        try {
+            SharedPreferences prefs = getSharedPreferences("_capacitor_preferences", MODE_PRIVATE);
+            String userId = prefs.getString("hollow_user_id", null);
+            if (userId == null || userId.isEmpty()) {
+                // Generate new user ID
+                userId = "user_" + System.currentTimeMillis() + "_" + 
+                    java.util.UUID.randomUUID().toString().substring(0, 9);
+                prefs.edit().putString("hollow_user_id", userId).apply();
+            }
+            return userId;
+        } catch (Exception e) {
+            android.util.Log.e("BackgroundService", "Error getting user ID: " + e.getMessage());
+            return "user_" + System.currentTimeMillis();
+        }
+    }
+    
+    /**
+     * Get backend token from environment/build config
+     * This should be set via build.gradle or environment variable
+     */
+    private String getBackendToken() {
+        // Try to get from SharedPreferences first (set by JS)
+        try {
+            SharedPreferences prefs = getSharedPreferences("_capacitor_preferences", MODE_PRIVATE);
+            String token = prefs.getString("backend_shared_token", null);
+            if (token != null && !token.isEmpty()) {
+                return token;
+            }
+        } catch (Exception e) {
+            android.util.Log.w("BackgroundService", "Error reading token from prefs: " + e.getMessage());
+        }
+        
+        // Fallback: try to get from BuildConfig (set via gradle.properties or build.gradle)
+        // For now, return null - token should be set by JavaScript on app start
+        android.util.Log.w("BackgroundService", "Backend token not found in preferences");
+        return null;
+    }
+    
+    /**
+     * Get persona from SharedPreferences
+     */
+    private String getPersona() {
+        try {
+            SharedPreferences prefs = getSharedPreferences("_capacitor_preferences", MODE_PRIVATE);
+            return prefs.getString("active_persona", "");
+        } catch (Exception e) {
+            android.util.Log.w("BackgroundService", "Error getting persona: " + e.getMessage());
+            return "";
+        }
+    }
+    
+    /**
+     * Get rules from SharedPreferences
+     */
+    private String getRules() {
+        try {
+            SharedPreferences prefs = getSharedPreferences("_capacitor_preferences", MODE_PRIVATE);
+            return prefs.getString("active_rules", "");
+        } catch (Exception e) {
+            android.util.Log.w("BackgroundService", "Error getting rules: " + e.getMessage());
+            return "";
+        }
+    }
 
     private void acquireWakeLock() {
         PowerManager powerManager = (PowerManager) getSystemService(POWER_SERVICE);
@@ -453,6 +626,164 @@ public class BackgroundService extends Service {
             }
         } else {
             android.util.Log.d("BackgroundService", "Android version < O, no channel needed");
+        }
+    }
+    
+    /**
+     * Static method to process ADPCM audio natively (called from plugin)
+     */
+    public static void processAdpcmNativeStatic(Context context, byte[] adpcmData) {
+        android.util.Log.d("BackgroundService", "processAdpcmNativeStatic called from plugin");
+        // Start service if not running
+        Intent serviceIntent = new Intent(context, BackgroundService.class);
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            context.startForegroundService(serviceIntent);
+        } else {
+            context.startService(serviceIntent);
+        }
+        
+        // Process audio in a new thread
+        new Thread(() -> {
+            try {
+                processWavFromAdpcm(context, adpcmData);
+            } catch (Exception e) {
+                android.util.Log.e("BackgroundService", "Error in processAdpcmNativeStatic: " + e.getMessage(), e);
+            }
+        }).start();
+    }
+    
+    /**
+     * Static method to process WAV Base64 directly (called from plugin for recorded audio)
+     */
+    public static void processWavBase64Native(Context context, String wavBase64) {
+        android.util.Log.d("BackgroundService", "processWavBase64Native called from plugin");
+        // Start service if not running
+        Intent serviceIntent = new Intent(context, BackgroundService.class);
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            context.startForegroundService(serviceIntent);
+        } else {
+            context.startService(serviceIntent);
+        }
+        
+        // Process audio in a new thread
+        new Thread(() -> {
+            try {
+                processWavBase64(context, wavBase64);
+            } catch (Exception e) {
+                android.util.Log.e("BackgroundService", "Error in processWavBase64Native: " + e.getMessage(), e);
+            }
+        }).start();
+    }
+    
+    /**
+     * Process WAV from ADPCM (shared logic)
+     */
+    private static void processWavFromAdpcm(Context context, byte[] adpcmData) {
+        try {
+            android.util.Log.d("BackgroundService", "Starting native audio processing pipeline (from ADPCM)");
+            long startTime = System.currentTimeMillis();
+            
+            // Step 1: Decode ADPCM to PCM
+            android.util.Log.d("BackgroundService", "Decoding ADPCM to PCM...");
+            ImaAdpcmDecoder.DecodeResult decodeResult = ImaAdpcmDecoder.decode(adpcmData, null);
+            short[] pcmSamples = decodeResult.samples;
+            android.util.Log.d("BackgroundService", "Decoded to " + pcmSamples.length + " PCM samples");
+            
+            // Step 2: Encode PCM to WAV Base64
+            android.util.Log.d("BackgroundService", "Encoding PCM to WAV Base64...");
+            String wavBase64 = WavEncoder.encodeToBase64(pcmSamples);
+            android.util.Log.d("BackgroundService", "WAV encoded: " + wavBase64.length() + " chars (base64)");
+            
+            // Process the WAV
+            processWavBase64(context, wavBase64);
+        } catch (Exception e) {
+            android.util.Log.e("BackgroundService", "Error in processWavFromAdpcm: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Process WAV Base64 (shared logic for both ADPCM and direct WAV)
+     */
+    private static void processWavBase64(Context context, String wavBase64) {
+        try {
+            long startTime = System.currentTimeMillis();
+            android.util.Log.d("BackgroundService", "Processing WAV Base64: " + wavBase64.length() + " chars");
+            
+            // Get configuration from SharedPreferences
+            SharedPreferences prefs = context.getSharedPreferences("_capacitor_preferences", Context.MODE_PRIVATE);
+            String userId = prefs.getString("hollow_user_id", null);
+            if (userId == null || userId.isEmpty()) {
+                userId = "user_" + System.currentTimeMillis() + "_" + 
+                    java.util.UUID.randomUUID().toString().substring(0, 9);
+                prefs.edit().putString("hollow_user_id", userId).apply();
+            }
+            
+            String backendToken = prefs.getString("backend_shared_token", null);
+            String persona = prefs.getString("active_persona", "");
+            String rules = prefs.getString("active_rules", "");
+            
+            if (backendToken == null || backendToken.isEmpty()) {
+                android.util.Log.e("BackgroundService", "Backend token not found - cannot process audio");
+                return;
+            }
+            
+            // Make HTTP request to backend
+            android.util.Log.d("BackgroundService", "Sending request to backend API...");
+            long apiStartTime = System.currentTimeMillis();
+            
+            ApiClient apiClient = new ApiClient(backendToken);
+            ApiClient.ChatResponse response = apiClient.sendAudioRequest(
+                wavBase64,
+                userId,
+                persona,
+                rules,
+                null // context - can be added later if needed
+            );
+            
+            long apiTime = System.currentTimeMillis() - apiStartTime;
+            android.util.Log.d("BackgroundService", "API request took " + apiTime + "ms");
+            
+            // Handle response
+            if (response.error != null && !response.error.isEmpty()) {
+                android.util.Log.e("BackgroundService", "API error: " + response.error);
+                // Notify JavaScript of error
+                notifyJavaScriptStatic(context, "bleAudioError", response.error);
+                return;
+            }
+            
+            if (response.text == null || response.text.isEmpty()) {
+                android.util.Log.w("BackgroundService", "API returned empty response");
+                return;
+            }
+            
+            android.util.Log.d("BackgroundService", "API response: " + response.text.substring(0, Math.min(50, response.text.length())) + "...");
+            
+            long totalTime = System.currentTimeMillis() - startTime;
+            android.util.Log.d("BackgroundService", "Complete native processing took " + totalTime + "ms");
+            
+            // Notify JavaScript with results
+            notifyJavaScriptStatic(context, "bleAudioProcessed", response.text);
+            if (response.transcription != null) {
+                notifyJavaScriptStatic(context, "bleTranscription", response.transcription);
+            }
+        } catch (Exception e) {
+            android.util.Log.e("BackgroundService", "Error in processWavBase64: " + e.getMessage(), e);
+            notifyJavaScriptStatic(context, "bleAudioError", e.getMessage());
+        }
+    }
+    
+    /**
+     * Static helper to notify JavaScript
+     */
+    private static void notifyJavaScriptStatic(Context context, String eventName, String data) {
+        try {
+            Intent intent = new Intent("com.hollow.watch.BLE_EVENT");
+            intent.putExtra("eventName", eventName);
+            intent.putExtra("data", data);
+            androidx.localbroadcastmanager.content.LocalBroadcastManager.getInstance(context).sendBroadcast(intent);
+            android.util.Log.d("BackgroundService", "Event broadcast sent (LocalBroadcast): " + eventName);
+        } catch (Exception e) {
+            android.util.Log.e("BackgroundService", "Error broadcasting event: " + e.getMessage(), e);
         }
     }
 }

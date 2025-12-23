@@ -11,6 +11,8 @@ import { backgroundService } from "./services/backgroundService";
 import { App } from "@capacitor/app";
 import { Capacitor } from "@capacitor/core";
 import { logger } from "./utils/logger";
+import { getBackendSharedToken } from "./api";
+import { getActivePreset } from "./storage/settingsStore";
 
 const queryClient = new QueryClient();
 
@@ -18,6 +20,24 @@ const AppComponent = () => {
   useEffect(() => {
     // Start Foreground Service on app startup (Android only) - sin delay
     if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android') {
+      // Configure backend token and preset for native processing
+      Promise.all([
+        getBackendSharedToken(),
+        getActivePreset()
+      ]).then(([token, preset]) => {
+        if (token) {
+          backgroundService.setBackendConfig({
+            backendToken: token,
+            persona: preset.persona || '',
+            rules: preset.rules || ''
+          }).catch((error) => {
+            logger.warn('Failed to set backend config', 'App', error instanceof Error ? error : new Error(String(error)));
+          });
+        }
+      }).catch((error) => {
+        logger.warn('Failed to get backend config', 'App', error instanceof Error ? error : new Error(String(error)));
+      });
+
       backgroundService.enable()
         .then(() => {
           logger.info('Foreground Service started successfully', 'App');
