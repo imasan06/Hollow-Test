@@ -244,20 +244,17 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
       if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android") {
         logger.debug("Using native audio processing", "AudioRecorder");
         
-        // Set up listeners for native processing results
+        // NOTE: Don't set up listeners here - useBle.ts already handles bleAudioProcessed, bleTranscription, and bleAudioError
+        // Setting up duplicate listeners causes messages to be saved twice
+        
+        // Set up only UI update listeners (not message saving)
         const processedListener = await BackgroundServiceNative?.addListener(
           "bleAudioProcessed",
           (eventData: any) => {
             const response = eventData.data;
             if (response) {
               setLastResponse(response);
-              appendMessage({
-                role: "assistant",
-                text: response,
-                timestamp: Date.now(),
-              }).catch((err) => {
-                logger.error("Failed to save response", "AudioRecorder", err);
-              });
+              // Don't save here - useBle.ts already handles it
             }
           }
         );
@@ -268,13 +265,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
             const transcription = eventData.data;
             if (transcription) {
               setLastTranscription(transcription);
-              appendMessage({
-                role: "user",
-                text: transcription,
-                timestamp: Date.now(),
-              }).catch((err) => {
-                logger.error("Failed to save transcription", "AudioRecorder", err);
-              });
+              // Don't save here - useBle.ts already handles it
             }
           }
         );
@@ -293,8 +284,17 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
           }
         );
 
-        // Process natively
-        const result = await backgroundService.processAudioNative(wavBase64);
+        // Get conversation context before processing
+        const { formatConversationContext } = await import(
+          "@/storage/conversationStore"
+        );
+        const conversationContext = await formatConversationContext(true);
+
+        // Process natively with context
+        const result = await backgroundService.processAudioNative(
+          wavBase64,
+          conversationContext || undefined
+        );
         if (!result.success) {
           throw new Error("Native processing failed");
         }

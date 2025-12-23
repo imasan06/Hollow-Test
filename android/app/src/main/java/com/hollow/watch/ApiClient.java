@@ -79,8 +79,22 @@ public class ApiClient {
             if (rules != null && !rules.isEmpty()) {
                 payload.put("rules", rules);
             }
-            if (context != null && !context.isEmpty()) {
-                payload.put("context", context);
+            if (context == null) {
+                Log.d(TAG, "Context is null - not sending context to backend");
+            } else if (context.isEmpty()) {
+                Log.d(TAG, "Context is empty - not sending context to backend");
+            } else {
+                // Context can be either JSON string (array) or formatted text
+                // Try to parse as JSON first, if it fails, treat as plain text
+                try {
+                    org.json.JSONArray contextArray = new org.json.JSONArray(context);
+                    payload.put("context", contextArray);
+                    Log.d(TAG, "Context sent as JSON array with " + contextArray.length() + " messages");
+                } catch (org.json.JSONException e) {
+                    // If not valid JSON, send as string (formatted text)
+                    payload.put("context", context);
+                    Log.d(TAG, "Context sent as plain text (" + context.length() + " chars)");
+                }
             }
             
             String url = apiEndpoint + "/v1/chat";

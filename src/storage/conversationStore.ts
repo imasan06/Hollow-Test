@@ -80,16 +80,29 @@ export async function appendMessage(
       try {
         const history = await getConversationHistory();
 
+        // Get the latest timestamp from history to ensure chronological order
+        const latestTimestamp = history.length > 0 
+          ? Math.max(...history.map(msg => msg.timestamp))
+          : 0;
+
+        // Ensure new message has a timestamp greater than the latest one
+        // This guarantees chronological order: user message -> assistant response
+        const baseTimestamp = message.timestamp || Date.now();
+        const newTimestamp = baseTimestamp > latestTimestamp 
+          ? baseTimestamp 
+          : latestTimestamp + 1; // Add 1ms to ensure it's after the latest message
+
         const newMessage = {
           role: message.role,
           text: message.text.trim(),
-          timestamp: message.timestamp || Date.now(),
+          timestamp: newTimestamp,
         };
 
         const isDuplicate = history.some(
           (msg) =>
             msg.timestamp === newMessage.timestamp &&
-            msg.role === newMessage.role
+            msg.role === newMessage.role &&
+            msg.text === newMessage.text
         );
 
         if (isDuplicate) {
@@ -103,6 +116,9 @@ export async function appendMessage(
 
         history.push(newMessage);
 
+        // Sort by timestamp to ensure chronological order
+        history.sort((a, b) => a.timestamp - b.timestamp);
+
         const limitedHistory = history.slice(-MAX_CONVERSATION_TURNS);
 
         await Preferences.set({
@@ -114,7 +130,7 @@ export async function appendMessage(
           `Saved ${message.role} message: "${newMessage.text.substring(
             0,
             50
-          )}...". Total turns: ${limitedHistory.length}`,
+          )}..." at timestamp ${newMessage.timestamp}. Total turns: ${limitedHistory.length}`,
           "Storage"
         );
 

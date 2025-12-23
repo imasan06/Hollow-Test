@@ -383,8 +383,16 @@ public class BackgroundServicePlugin extends Plugin {
                 return;
             }
             
+            // Get optional context from JavaScript
+            String context = call.getString("context", null);
+            if (context != null && !context.isEmpty()) {
+                Log.d(TAG, "Received context from JavaScript: " + context.length() + " chars");
+            } else {
+                Log.d(TAG, "No context provided from JavaScript, will try to read from SharedPreferences");
+            }
+            
             // Process WAV directly (no need to convert to ADPCM)
-            BackgroundService.processWavBase64Native(getContext(), wavBase64);
+            BackgroundService.processWavBase64Native(getContext(), wavBase64, context);
             
             JSObject result = new JSObject();
             result.put("success", true);

@@ -660,10 +660,14 @@ public class BackgroundService extends Service {
     /**
      * Static method to process WAV Base64 directly (called from plugin for recorded audio)
      */
-    public static void processWavBase64Native(Context context, String wavBase64) {
+    public static void processWavBase64Native(Context context, String wavBase64, String contextText) {
         android.util.Log.d("BackgroundService", "processWavBase64Native called from plugin");
         // Start service if not running
         Intent serviceIntent = new Intent(context, BackgroundService.class);
+        if (contextText != null && !contextText.isEmpty()) {
+            serviceIntent.putExtra("conversation_context", contextText);
+            android.util.Log.d("BackgroundService", "Context passed via Intent: " + contextText.length() + " chars");
+        }
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
             context.startForegroundService(serviceIntent);
         } else {
@@ -671,9 +675,10 @@ public class BackgroundService extends Service {
         }
         
         // Process audio in a new thread
+        final String finalContext = contextText; // Make final for use in thread
         new Thread(() -> {
             try {
-                processWavBase64(context, wavBase64);
+                processWavBase64(context, wavBase64, finalContext);
             } catch (Exception e) {
                 android.util.Log.e("BackgroundService", "Error in processWavBase64Native: " + e.getMessage(), e);
             }
@@ -699,8 +704,8 @@ public class BackgroundService extends Service {
             String wavBase64 = WavEncoder.encodeToBase64(pcmSamples);
             android.util.Log.d("BackgroundService", "WAV encoded: " + wavBase64.length() + " chars (base64)");
             
-            // Process the WAV
-            processWavBase64(context, wavBase64);
+            // Process the WAV (no context from BLE, will read from SharedPreferences)
+            processWavBase64(context, wavBase64, null);
         } catch (Exception e) {
             android.util.Log.e("BackgroundService", "Error in processWavFromAdpcm: " + e.getMessage(), e);
         }
@@ -709,13 +714,16 @@ public class BackgroundService extends Service {
     /**
      * Process WAV Base64 (shared logic for both ADPCM and direct WAV)
      */
-    private static void processWavBase64(Context context, String wavBase64) {
+    private static void processWavBase64(Context context, String wavBase64, String providedContext) {
         try {
             long startTime = System.currentTimeMillis();
             android.util.Log.d("BackgroundService", "Processing WAV Base64: " + wavBase64.length() + " chars");
             
             // Get configuration from SharedPreferences
+            // Always get a fresh instance to avoid cache issues
             SharedPreferences prefs = context.getSharedPreferences("_capacitor_preferences", Context.MODE_PRIVATE);
+            
+            // Force reload by getting a new instance if possible (Android doesn't cache, but this ensures fresh read)
             String userId = prefs.getString("hollow_user_id", null);
             if (userId == null || userId.isEmpty()) {
                 userId = "user_" + System.currentTimeMillis() + "_" + 
@@ -732,6 +740,130 @@ public class BackgroundService extends Service {
                 return;
             }
             
+            // Use provided context if available, otherwise try to read from SharedPreferences
+            String contextText = (providedContext != null && !providedContext.isEmpty()) ? providedContext : null;
+            
+            if (contextText == null || contextText.isEmpty()) {
+                android.util.Log.d("BackgroundService", "No context provided, trying to read from SharedPreferences");
+                
+                // CRITICAL: Always get fresh SharedPreferences instance and force disk read
+                // This ensures we get the latest data even after multiple requests
+                SharedPreferences.Editor editor = prefs.edit();
+                editor.apply(); // Force any pending writes to complete
+                
+                // Get fresh instance and force sync
+                prefs = context.getSharedPreferences("_capacitor_preferences", Context.MODE_PRIVATE);
+                java.util.Map<String, ?> allPrefs = prefs.getAll(); // Force disk read
+                
+                // Try reading with more retries and longer waits for background mode
+                // Capacitor Preferences uses apply() which is async, so we need to wait longer
+                String conversationHistoryJson = null;
+                for (int retry = 0; retry < 15; retry++) {
+                    // Always get fresh instance on each retry to avoid stale cache
+                    if (retry > 0) {
+                        prefs = context.getSharedPreferences("_capacitor_preferences", Context.MODE_PRIVATE);
+                        allPrefs = prefs.getAll(); // Force fresh disk read
+                    }
+                    
+                    // Try multiple methods to read the value
+                    conversationHistoryJson = prefs.getString("conversation_history", null);
+                    
+                    // Also try reading from getAll() which forces a sync
+                    if (conversationHistoryJson == null || conversationHistoryJson.isEmpty()) {
+                        if (allPrefs.containsKey("conversation_history")) {
+                            Object historyValue = allPrefs.get("conversation_history");
+                            if (historyValue != null) {
+                                conversationHistoryJson = historyValue.toString();
+                                android.util.Log.d("BackgroundService", "Found conversation_history via getAll() on retry " + retry);
+                            }
+                        }
+                    }
+                    
+                    if (conversationHistoryJson != null && !conversationHistoryJson.isEmpty()) {
+                        android.util.Log.d("BackgroundService", "Found conversation_history on retry " + retry + " (" + conversationHistoryJson.length() + " chars)");
+                        break;
+                    }
+                    
+                    if (retry < 14) {
+                        try {
+                            // Increase wait time progressively: 50ms, 100ms, 150ms, etc.
+                            Thread.sleep(50 + (retry * 50));
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            break;
+                        }
+                    }
+                }
+                
+                // Debug: Log all keys in SharedPreferences to verify conversation_history exists
+                if (conversationHistoryJson == null || conversationHistoryJson.isEmpty()) {
+                    allPrefs = prefs.getAll();
+                    android.util.Log.d("BackgroundService", "All SharedPreferences keys: " + allPrefs.keySet().toString());
+                    if (allPrefs.containsKey("conversation_history")) {
+                        Object historyValue = allPrefs.get("conversation_history");
+                        android.util.Log.d("BackgroundService", "conversation_history exists but value is: " + (historyValue == null ? "null" : historyValue.getClass().getName() + " = " + historyValue.toString().substring(0, Math.min(100, historyValue.toString().length()))));
+                    } else {
+                        android.util.Log.w("BackgroundService", "conversation_history key NOT FOUND in SharedPreferences after all retries!");
+                    }
+                }
+                
+                if (conversationHistoryJson == null) {
+                    android.util.Log.d("BackgroundService", "conversation_history is null in SharedPreferences (after retries)");
+                } else if (conversationHistoryJson.isEmpty()) {
+                    android.util.Log.d("BackgroundService", "conversation_history is empty in SharedPreferences");
+                } else {
+                android.util.Log.d("BackgroundService", "Found conversation_history: " + conversationHistoryJson.length() + " chars");
+                try {
+                    // Parse JSON array and format as text (matching JavaScript formatConversationContext)
+                    // CRITICAL: Always parse fresh - don't reuse old data
+                    org.json.JSONArray historyArray = new org.json.JSONArray(conversationHistoryJson);
+                    android.util.Log.d("BackgroundService", "Parsed conversation_history: " + historyArray.length() + " messages (fresh parse)");
+                    if (historyArray.length() > 0) {
+                        // Format messages as "USER: text\n\nASSISTANT: text" (matching backend expectation)
+                        java.util.List<String> formattedMessages = new java.util.ArrayList<>();
+                        int maxMessages = Math.min(historyArray.length(), 12); // MAX_CONTEXT_TURNS
+                        int startIndex = Math.max(0, historyArray.length() - maxMessages);
+                        
+                        for (int i = startIndex; i < historyArray.length(); i++) {
+                            org.json.JSONObject msg = historyArray.getJSONObject(i);
+                            String role = msg.optString("role", "");
+                            String text = msg.optString("text", "");
+                            
+                            if (!text.isEmpty() && (role.equals("user") || role.equals("assistant"))) {
+                                String roleLabel = role.equals("user") ? "USER" : "ASSISTANT";
+                                formattedMessages.add(roleLabel + ": " + text);
+                            }
+                        }
+                        
+                        if (!formattedMessages.isEmpty()) {
+                            // Build formatted context string (compatible with older Android versions)
+                            StringBuilder contextBuilder = new StringBuilder();
+                            for (int i = 0; i < formattedMessages.size(); i++) {
+                                if (i > 0) {
+                                    contextBuilder.append("\n\n");
+                                }
+                                contextBuilder.append(formattedMessages.get(i));
+                            }
+                            contextText = contextBuilder.toString();
+                            android.util.Log.d("BackgroundService", "Formatted conversation context: " + formattedMessages.size() + " messages (" + contextText.length() + " chars)");
+                            android.util.Log.d("BackgroundService", "Context preview (first 200 chars): " + contextText.substring(0, Math.min(200, contextText.length())));
+                        } else {
+                            android.util.Log.d("BackgroundService", "No valid messages found in conversation_history after filtering");
+                        }
+                    } else {
+                        android.util.Log.d("BackgroundService", "conversation_history array is empty");
+                    }
+                } catch (org.json.JSONException e) {
+                    android.util.Log.w("BackgroundService", "Invalid conversation_history JSON: " + e.getMessage());
+                    android.util.Log.w("BackgroundService", "JSON content (first 200 chars): " + conversationHistoryJson.substring(0, Math.min(200, conversationHistoryJson.length())));
+                } catch (Exception e) {
+                    android.util.Log.e("BackgroundService", "Error formatting context: " + e.getMessage(), e);
+                }
+                }
+            } else {
+                android.util.Log.d("BackgroundService", "Using context provided from JavaScript: " + contextText.length() + " chars");
+            }
+            
             // Make HTTP request to backend
             android.util.Log.d("BackgroundService", "Sending request to backend API...");
             long apiStartTime = System.currentTimeMillis();
@@ -742,7 +874,7 @@ public class BackgroundService extends Service {
                 userId,
                 persona,
                 rules,
-                null // context - can be added later if needed
+                contextText // Send formatted conversation history as context
             );
             
             long apiTime = System.currentTimeMillis() - apiStartTime;

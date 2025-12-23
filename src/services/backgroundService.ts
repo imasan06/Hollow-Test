@@ -35,6 +35,7 @@ interface BackgroundServicePlugin {
   /** Process WAV audio natively (for recorded audio) */
   processAudioNative(options: {
     wavBase64: string;
+    context?: string; // Optional conversation context
   }): Promise<{ success: boolean }>;
 }
 
@@ -467,7 +468,10 @@ class BackgroundService {
   /**
    * Process WAV audio natively (for recorded audio)
    */
-  async processAudioNative(wavBase64: string): Promise<{ success: boolean }> {
+  async processAudioNative(
+    wavBase64: string,
+    context?: string
+  ): Promise<{ success: boolean }> {
     if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android") {
       try {
         if (
@@ -477,6 +481,7 @@ class BackgroundService {
           logger.info("Processing audio natively...", "BackgroundService");
           const result = await BackgroundServiceNative.processAudioNative({
             wavBase64,
+            context,
           });
           logger.debug("Native audio processing initiated", "BackgroundService");
           return result;
