@@ -183,6 +183,6 @@ public class ApiClient {
             Log.e(TAG, "Unexpected error: " + e.getMessage(), e);
             return new ChatResponse(null, null, "Unexpected error: " + e.getMessage());
         }
-    a}
+    }
 }
 
