@@ -33,6 +33,7 @@ public class BackgroundService extends Service {
     
     private PowerManager.WakeLock wakeLock;
     private BleConnectionManager bleManager;
+    private static volatile BleConnectionManager staticBleManager; // Static reference for static methods
     private String connectedDeviceAddress;
     private HandlerThread bleHandlerThread;
     private Handler bleHandler;
@@ -61,6 +62,7 @@ public class BackgroundService extends Service {
             // Usar postAtFrontOfQueue para máxima prioridad
             bleHandler.postAtFrontOfQueue(() -> {
                 bleManager = new BleConnectionManager(BackgroundService.this);
+                staticBleManager = bleManager; // Store static reference
                 bleManager.setEventListener(new BleConnectionManager.BleEventListener() {
                     @Override
                     public void onConnectionStateChanged(boolean connected) {
@@ -216,8 +218,11 @@ public class BackgroundService extends Service {
                 if (bleManager != null) {
                     bleManager.cleanup();
                     bleManager = null;
+                    staticBleManager = null; // Clear static reference
                 }
             });
+        } else {
+            staticBleManager = null; // Clear static reference if handler not available
         }
         
         // Detener handler thread
@@ -757,6 +762,24 @@ public class BackgroundService extends Service {
             }
             
             android.util.Log.d("BackgroundService", "API response: " + response.text.substring(0, Math.min(50, response.text.length())) + "...");
+            
+            // Send response to watch via BLE
+            android.util.Log.d("BackgroundService", "Sending response to watch: " + response.text.substring(0, Math.min(50, response.text.length())) + "...");
+            if (staticBleManager != null && staticBleManager.isConnected()) {
+                try {
+                    byte[] responseBytes = response.text.getBytes("UTF-8");
+                    boolean sent = staticBleManager.sendData(responseBytes);
+                    if (sent) {
+                        android.util.Log.d("BackgroundService", "Response sent to watch successfully");
+                    } else {
+                        android.util.Log.e("BackgroundService", "Failed to send response to watch");
+                    }
+                } catch (Exception e) {
+                    android.util.Log.e("BackgroundService", "Error sending response to watch: " + e.getMessage(), e);
+                }
+            } else {
+                android.util.Log.w("BackgroundService", "BLE manager not available or not connected - cannot send response to watch");
+            }
             
             long totalTime = System.currentTimeMillis() - startTime;
             android.util.Log.d("BackgroundService", "Complete native processing took " + totalTime + "ms");
