@@ -4,10 +4,11 @@ import { logger } from "@/utils/logger";
 const CONVERSATION_STORAGE_KEY = "conversation_history";
 const PERSISTENT_CONTEXT_KEY = "persistent_context";
 const PERSISTENT_CONTEXT_PERSONA_KEY = "persistent_context_persona_id";
-const MAX_CONVERSATION_TURNS = 24;
 
-const MAX_CONTEXT_TURNS = 12;
-const MAX_CONTEXT_CHARS = 4000;
+// Reduced limits for better performance
+const MAX_CONVERSATION_TURNS = 20; // Reduced from 24
+const MAX_CONTEXT_TURNS = 10; // Reduced from 12
+const MAX_CONTEXT_CHARS = 3000; // Reduced from 4000
 
 export interface ConversationMessage {
   role: "user" | "assistant";
@@ -215,9 +216,6 @@ export async function updatePersistentContext(
   }
 }
 
-/**
- * Clear persistent context (called when persona changes)
- */
 export async function clearPersistentContext(): Promise<void> {
   try {
     await Preferences.remove({ key: PERSISTENT_CONTEXT_KEY });
@@ -272,10 +270,17 @@ export async function formatConversationContext(
   const persistentContext = await getPersistentContext();
   const contextParts: string[] = [];
 
+  // Add persistent context (with size limit)
   if (persistentContext && persistentContext.trim().length > 0) {
-    contextParts.push(persistentContext.trim());
+    const trimmed = persistentContext.trim();
+    // Limit persistent context to 1000 chars to leave room for messages
+    const limited = trimmed.length > 1000 
+      ? trimmed.substring(0, 1000) + "..."
+      : trimmed;
+    contextParts.push(limited);
   }
 
+  // Get recent messages
   const allMessages = await getLastTurns(MAX_CONTEXT_TURNS);
 
   if (allMessages.length > 0) {
@@ -291,12 +296,19 @@ export async function formatConversationContext(
       }
     }
 
+    // Take only most recent messages
     const contextMessages = messagesToFormat.slice(-MAX_CONTEXT_TURNS);
 
+    // Format messages concisely
     const formattedMessages = contextMessages
       .map((msg) => {
-        const roleLabel = msg.role === "user" ? "USER" : "ASSISTANT";
-        return `${roleLabel}: ${msg.text}`;
+        // Use shorter role labels to save space
+        const roleLabel = msg.role === "user" ? "U" : "A";
+        // Truncate very long messages
+        const text = msg.text.length > 500 
+          ? msg.text.substring(0, 500) + "..."
+          : msg.text;
+        return `${roleLabel}: ${text}`;
       })
       .join("\n\n");
 
@@ -307,12 +319,15 @@ export async function formatConversationContext(
 
   let formatted = contextParts.join("\n\n");
 
+  // Aggressive truncation if needed
   if (formatted.length > MAX_CONTEXT_CHARS) {
+    // Try to truncate from the beginning while preserving persistent context
     if (persistentContext && persistentContext.length > MAX_CONTEXT_CHARS / 2) {
       const messagesPart = contextParts.length > 1 ? contextParts[1] : "";
       if (messagesPart) {
         const availableChars = MAX_CONTEXT_CHARS - persistentContext.length - 4;
         if (availableChars > 100) {
+          // Truncate messages from the beginning
           const truncateAt = messagesPart.lastIndexOf("\n\n", availableChars);
           if (truncateAt > availableChars / 2) {
             formatted =
@@ -320,21 +335,24 @@ export async function formatConversationContext(
               "\n\n" +
               messagesPart.substring(truncateAt + 2);
           } else {
+            // Just take the end of messages
             formatted =
               persistentContext +
               "\n\n" +
               messagesPart.substring(messagesPart.length - availableChars);
           }
         } else {
+          // Not enough room for messages, just use persistent context
           formatted = persistentContext;
         }
       }
     } else {
-      const truncateAt = formatted.lastIndexOf("\n\n", MAX_CONTEXT_CHARS);
-      if (truncateAt > MAX_CONTEXT_CHARS / 2) {
-        formatted = formatted.substring(truncateAt + 2);
-      } else {
-        formatted = formatted.substring(formatted.length - MAX_CONTEXT_CHARS);
+      // Truncate from the beginning, keeping most recent content
+      formatted = formatted.substring(formatted.length - MAX_CONTEXT_CHARS);
+      // Try to start at a message boundary
+      const firstNewline = formatted.indexOf("\n\n");
+      if (firstNewline > 0 && firstNewline < 100) {
+        formatted = formatted.substring(firstNewline + 2);
       }
     }
   }

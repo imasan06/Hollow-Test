@@ -58,7 +58,7 @@ export function useBle(): UseBleReturn {
   const AUDIO_DEDUP_WINDOW_MS = 2000;
 
   const processingTimeoutRef = useRef<number | null>(null);
-  const MAX_PROCESSING_TIME_MS = 180000;
+  const MAX_PROCESSING_TIME_MS = 30000; // Reduced from 180s to 30s
 
   const handlePersonaUpdateFromWatch = useCallback(async (data: string) => {
     try {
@@ -110,23 +110,24 @@ export function useBle(): UseBleReturn {
     async (adpcmData: Uint8Array, mode: "VOICE" | "SILENT") => {
       const now = Date.now();
 
-      // Check if in background for different handling
-      const isBackground = document.visibilityState === 'hidden' || (typeof window !== 'undefined' && !document.hasFocus());
-      
-      if (isProcessingRequest.current) {
-        const timeSinceStart = now - lastAudioProcessedTime.current;
-        logger.warn(
-          `Another request is in progress (${timeSinceStart}ms ago), ignoring this audio`,
+      // Quick duplicate check
+      const timeSinceLastAudio = now - lastAudioProcessedTime.current;
+      if (timeSinceLastAudio < AUDIO_DEDUP_WINDOW_MS && lastAudioProcessedTime.current > 0) {
+        logger.debug(
+          `Skipping duplicate audio (${timeSinceLastAudio}ms since last)`,
           "Hook"
         );
+        return;
+      }
 
-        // In background: Be more lenient - allow new requests after 30s to prevent blocking
-        // In foreground: Only reset after max timeout (3min)
-        const timeoutThreshold = isBackground ? 30000 : MAX_PROCESSING_TIME_MS;
+      // Check if already processing with better timeout handling
+      if (isProcessingRequest.current) {
+        const timeSinceStart = now - lastAudioProcessedTime.current;
         
-        if (timeSinceStart > timeoutThreshold) {
+        // More aggressive timeout - 30s instead of 180s
+        if (timeSinceStart > MAX_PROCESSING_TIME_MS) {
           logger.error(
-            `Processing flag stuck for too long (${timeSinceStart}ms) - forcing reset`,
+            `Processing flag stuck for ${timeSinceStart}ms - forcing reset`,
             "Hook"
           );
           isProcessingRequest.current = false;
@@ -138,55 +139,19 @@ export function useBle(): UseBleReturn {
           }
           // Continue processing this audio after reset
         } else {
-          // In background: Log but allow processing if reasonable time has passed (10s)
-          // This prevents permanent blocking in background where requests can queue
-          if (isBackground && timeSinceStart > 10000) {
-            logger.warn(
-              `Background: Previous request taking long (${timeSinceStart}ms), allowing new request`,
-              "Hook"
-            );
-            // Don't block - allow this audio to be processed
-            // The deduplication window will prevent true duplicates
-          } else {
-            return;
-          }
+          logger.debug(
+            `Already processing request (${timeSinceStart}ms ago), skipping`,
+            "Hook"
+          );
+          return;
         }
       }
-
-      // Check for duplicate audio (prevent processing same audio twice)
-      const timeSinceLastAudio = now - lastAudioProcessedTime.current;
-      if (
-        timeSinceLastAudio < AUDIO_DEDUP_WINDOW_MS &&
-        lastAudioProcessedTime.current > 0
-      ) {
-        logger.debug(
-          `Skipping duplicate audio (${timeSinceLastAudio}ms since last)`,
-          "Hook"
-        );
-        return;
-      }
-      
-      // In background: Update lastAudioProcessedTime immediately to prevent duplicates
-      // This ensures we don't process the same audio chunk multiple times
-      lastAudioProcessedTime.current = now;
 
       lastAudioProcessedTime.current = now;
 
       const pipelineStart = performance.now();
-      const timing = {
-        capture: pipelineStart,
-        audioProcessing: 0,
-        transcription: 0,
-        contextFetch: 0,
-        chatRequest: 0,
-        responseSave: 0,
-        bleSend: 0,
-        total: 0,
-      };
 
-      const sessionId = `session_${Date.now()}_${Math.random()
-        .toString(36)
-        .substr(2, 9)}`;
+      const sessionId = `session_${now}`;
       activeSessionId.current = sessionId;
       isProcessingRequest.current = true;
 
@@ -214,7 +179,7 @@ export function useBle(): UseBleReturn {
 
       try {
         logger.info(
-          `[TIMING] Audio capture received: ${adpcmData.length} bytes`,
+          `Processing audio: ${adpcmData.length} bytes`,
           "Hook"
         );
 
@@ -222,14 +187,10 @@ export function useBle(): UseBleReturn {
           throw new Error("No audio data received");
         }
 
-        const isBackground =
-          document.visibilityState === "hidden" ||
-          (typeof window !== "undefined" && !document.hasFocus());
-
         const audioProcessingStart = performance.now();
         const { samples } = decodeImaAdpcm(adpcmData);
         const wavBase64 = encodeWavBase64(samples);
-        timing.audioProcessing = performance.now() - audioProcessingStart;
+        const audioProcessingTime = performance.now() - audioProcessingStart;
 
         const duration = getAudioDuration(samples.length);
         setAudioDuration(duration);
@@ -240,10 +201,6 @@ export function useBle(): UseBleReturn {
             logger.error(`WAV validation failed: ${validation.error}`, "Hook");
             throw new Error(`Invalid WAV format: ${validation.error}`);
           }
-          logger.debug(
-            `WAV validated: ${validation.sampleRate}Hz, ${validation.channels} channel(s)`,
-            "Hook"
-          );
         }
 
         let apiResponse: {
@@ -253,17 +210,6 @@ export function useBle(): UseBleReturn {
         };
 
         if (APP_CONFIG.BLE_MOCK_MODE) {
-          const { formatConversationContext } = await import(
-            "@/storage/conversationStore"
-          );
-          const mockContext = await formatConversationContext();
-          if (mockContext) {
-            logger.debug(
-              `Mock mode: Context available but not sent (mock response)`,
-              "Hook"
-            );
-          }
-
           apiResponse = {
             transcription: "Demo audio (sine wave 440Hz)",
             text: "Hi, this is a demo response.",
@@ -274,43 +220,27 @@ export function useBle(): UseBleReturn {
             return;
           }
 
-          const apiStart = performance.now();
-
+          const contextStart = performance.now();
           const conversationContext = await formatConversationContext(true);
-          timing.contextFetch = performance.now() - apiStart;
+          const contextTime = performance.now() - contextStart;
 
           const apiCallStart = performance.now();
           apiResponse = await sendTranscription({
             audio: wavBase64,
             context: conversationContext || undefined,
           });
-          timing.transcription = performance.now() - apiCallStart;
-          timing.chatRequest = timing.transcription;
+          const apiCallTime = performance.now() - apiCallStart;
 
           if (!apiResponse.transcription) {
             throw new Error("Backend did not return transcription");
           }
 
           logger.info(
-            `[TIMING] Context fetch: ${timing.contextFetch.toFixed(2)}ms`,
-            "Hook"
-          );
-          logger.info(
-            `[TIMING] Backend API (transcription + chat): ${timing.transcription.toFixed(
-              2
-            )}ms`,
+            `[TIMING] Audio: ${audioProcessingTime.toFixed(2)}ms | Context: ${contextTime.toFixed(2)}ms | API: ${apiCallTime.toFixed(2)}ms`,
             "Hook"
           );
 
           setLastTranscription(apiResponse.transcription);
-
-          await appendMessage({
-            role: "user",
-            text: apiResponse.transcription,
-            timestamp: Date.now(),
-          });
-
-          logger.debug("User message saved to conversation history", "Hook");
         }
 
         if (activeSessionId.current !== sessionId) {
@@ -329,31 +259,38 @@ export function useBle(): UseBleReturn {
         setVoiceState("responding");
 
         const saveStart = performance.now();
-        const bleStart = performance.now();
 
+        // Save messages and send BLE in parallel
         const operations: Promise<void>[] = [];
 
+        // Save user message
+        if (apiResponse.transcription) {
+          operations.push(
+            appendMessage({
+              role: "user",
+              text: apiResponse.transcription,
+              timestamp: Date.now(),
+            })
+          );
+        }
+
+        // Save assistant message
         if (apiResponse.text) {
           operations.push(
             appendMessage({
               role: "assistant",
               text: apiResponse.text,
               timestamp: Date.now(),
-            }).then(() => {
-              timing.responseSave = performance.now() - saveStart;
             })
           );
         }
 
+        // Send to watch
         if (activeSessionId.current === sessionId && apiResponse.text) {
           operations.push(
             bleManager
               .sendAiText(apiResponse.text)
-              .then(() => {
-                timing.bleSend = performance.now() - bleStart;
-              })
               .catch((error) => {
-                timing.bleSend = performance.now() - bleStart;
                 const errorMsg =
                   error instanceof Error ? error.message : String(error);
                 if (
@@ -378,22 +315,11 @@ export function useBle(): UseBleReturn {
 
         await Promise.all(operations);
 
-        logger.info(
-          `[TIMING] Response save: ${timing.responseSave.toFixed(
-            2
-          )}ms, BLE send: ${timing.bleSend.toFixed(2)}ms (parallel)`,
-          "Hook"
-        );
+        const saveTime = performance.now() - saveStart;
+        const totalTime = performance.now() - pipelineStart;
 
-        timing.total = performance.now() - pipelineStart;
         logger.info(
-          `[TIMING SUMMARY] Total: ${timing.total.toFixed(2)}ms | ` +
-            `Audio: ${timing.audioProcessing.toFixed(2)}ms | ` +
-            `Transcription: ${timing.transcription.toFixed(2)}ms | ` +
-            `Context: ${timing.contextFetch.toFixed(2)}ms | ` +
-            `Chat: ${timing.chatRequest.toFixed(2)}ms | ` +
-            `Save: ${timing.responseSave.toFixed(2)}ms | ` +
-            `BLE: ${timing.bleSend.toFixed(2)}ms`,
+          `[TIMING] Save: ${saveTime.toFixed(2)}ms | Total: ${totalTime.toFixed(2)}ms`,
           "Hook"
         );
 
@@ -440,17 +366,22 @@ export function useBle(): UseBleReturn {
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return;
 
-    // Store listener remove functions for cleanup
     const listenerRemovers: Array<{ remove: () => Promise<void> }> = [];
+    let isCleanedUp = false;
 
     const setupNativeListeners = async () => {
       try {
-        logger.debug("Setting up native BackgroundService event listeners via Capacitor addListener", "Hook");
+        logger.debug("Setting up native BackgroundService event listeners", "Hook");
 
-        // Handler for connection state changes
+        // CRITICAL: Check if already setup to prevent duplicates
+        if (listenerRemovers.length > 0) {
+          logger.warn("Listeners already setup, skipping duplicate setup", "Hook");
+          return;
+        }
+
         const handleConnectionState = (eventData: BleEventData) => {
+          if (isCleanedUp) return;
           try {
-            logger.debug(`Native bleConnectionStateChanged event received`, "Hook");
             const connected = eventData.value === true;
             setConnectionState(connected ? "connected" : "disconnected");
             if (connected) {
@@ -465,47 +396,47 @@ export function useBle(): UseBleReturn {
           }
         };
 
-        // Handler for audio data
         const handleAudioData = (eventData: BleEventData) => {
+          if (isCleanedUp) return;
           try {
             if (eventData.data) {
-                logger.debug(
-                  `Received bleAudioData event: ${eventData.data.length} chars (base64)`,
-                  "Hook"
-                );
+              logger.debug(
+                `Received bleAudioData event: ${eventData.data.length} chars (base64)`,
+                "Hook"
+              );
 
-                const binaryString = atob(eventData.data);
-                const bytes = new Uint8Array(binaryString.length);
-                for (let i = 0; i < binaryString.length; i++) {
-                  bytes[i] = binaryString.charCodeAt(i);
-                }
-                logger.debug(
-                  `Converted to ${bytes.length} bytes, calling processAudio`,
-                  "Hook"
-                );
+              const binaryString = atob(eventData.data);
+              const bytes = new Uint8Array(binaryString.length);
+              for (let i = 0; i < binaryString.length; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+              }
+              logger.debug(
+                `Converted to ${bytes.length} bytes, calling processAudio`,
+                "Hook"
+              );
 
-                processAudio(bytes, "VOICE");
+              processAudio(bytes, "VOICE");
             } else {
               logger.warn(
                 "bleAudioData event received but data is missing",
                 "Hook"
               );
             }
-              } catch (error) {
-                logger.error(
-                  "Error processing native audio data",
-                  "Hook",
-                  error instanceof Error ? error : new Error(String(error))
-                );
+          } catch (error) {
+            logger.error(
+              "Error processing native audio data",
+              "Hook",
+              error instanceof Error ? error : new Error(String(error))
+            );
 
-                isProcessingRequest.current = false;
-                setIsProcessing(false);
-                setVoiceState("idle");
-              }
+            isProcessingRequest.current = false;
+            setIsProcessing(false);
+            setVoiceState("idle");
+          }
         };
 
-        // Handler for errors
         const handleError = (eventData: BleEventData) => {
+          if (isCleanedUp) return;
           try {
             const errorMsg = eventData.error || "Unknown BLE error";
             setLastError(errorMsg);
@@ -514,146 +445,97 @@ export function useBle(): UseBleReturn {
               "Hook",
               new Error(errorMsg)
             );
-      } catch (error) {
-        logger.error(
+          } catch (error) {
+            logger.error(
               "Error handling BLE error event",
-          "Hook",
-          error instanceof Error ? error : new Error(String(error))
-        );
-      }
-    };
+              "Hook",
+              error instanceof Error ? error : new Error(String(error))
+            );
+          }
+        };
 
-        // Register listeners using Capacitor's addListener API
-        // This properly connects to the notifyListeners calls in the native plugin
+        const handleAudioProcessed = (eventData: BleEventData) => {
+          if (isCleanedUp) return;
+          try {
+            const response = eventData.data;
+            if (response) {
+              setLastResponse(response);
+              logger.debug("Native processing response received", "Hook");
+              appendMessage({
+                role: "assistant",
+                text: response,
+                timestamp: Date.now(),
+              }).catch((err) => {
+                logger.error("Failed to save response", "Hook", err);
+              });
+            }
+          } catch (error) {
+            logger.error(
+              "Error handling processed audio event",
+              "Hook",
+              error instanceof Error ? error : new Error(String(error))
+            );
+          }
+        };
+
+        const handleTranscription = (eventData: BleEventData) => {
+          if (isCleanedUp) return;
+          try {
+            const transcription = eventData.data;
+            if (transcription) {
+              setLastTranscription(transcription);
+              logger.debug("Native processing transcription received", "Hook");
+              appendMessage({
+                role: "user",
+                text: transcription,
+                timestamp: Date.now(),
+              }).catch((err) => {
+                logger.error("Failed to save transcription", "Hook", err);
+              });
+            }
+          } catch (error) {
+            logger.error(
+              "Error handling transcription event",
+              "Hook",
+              error instanceof Error ? error : new Error(String(error))
+            );
+          }
+        };
+
+        const handleAudioError = (eventData: BleEventData) => {
+          if (isCleanedUp) return;
+          try {
+            const errorMsg = eventData.data || "Unknown error";
+            setLastError(errorMsg);
+            logger.error("Native processing error", "Hook", new Error(errorMsg));
+            toast({
+              title: "Processing Error",
+              description: errorMsg,
+              variant: "destructive",
+            });
+          } catch (error) {
+            logger.error(
+              "Error handling audio error event",
+              "Hook",
+              error instanceof Error ? error : new Error(String(error))
+            );
+          }
+        };
+
         if (BackgroundServiceNative && typeof BackgroundServiceNative.addListener === 'function') {
-          const connectionListener = await BackgroundServiceNative.addListener(
-      "bleConnectionStateChanged",
-            handleConnectionState
-          );
-          listenerRemovers.push(connectionListener);
-          logger.debug("Registered bleConnectionStateChanged listener via Capacitor", "Hook");
+          const listeners = await Promise.all([
+            BackgroundServiceNative.addListener("bleConnectionStateChanged", handleConnectionState),
+            BackgroundServiceNative.addListener("bleAudioData", handleAudioData),
+            BackgroundServiceNative.addListener("bleError", handleError),
+            BackgroundServiceNative.addListener("bleAudioProcessed", handleAudioProcessed),
+            BackgroundServiceNative.addListener("bleTranscription", handleTranscription),
+            BackgroundServiceNative.addListener("bleAudioError", handleAudioError)
+          ]);
 
-          const audioListener = await BackgroundServiceNative.addListener(
-        "bleAudioData",
-            handleAudioData
-      );
-          listenerRemovers.push(audioListener);
-          logger.debug("Registered bleAudioData listener via Capacitor", "Hook");
-
-          const errorListener = await BackgroundServiceNative.addListener(
-        "bleError",
-            handleError
-          );
-          listenerRemovers.push(errorListener);
-          logger.debug("Registered bleError listener via Capacitor", "Hook");
-
-          // Register listeners for native processing results
-          const processedListener = await BackgroundServiceNative.addListener(
-            "bleAudioProcessed",
-            (eventData: BleEventData) => {
-              try {
-                const response = eventData.data;
-                if (response) {
-                  setLastResponse(response);
-                  logger.debug("Native processing response received", "Hook");
-                  appendMessage({
-                    role: "assistant",
-                    text: response,
-                    timestamp: Date.now(),
-                  }).catch((err) => {
-                    logger.error("Failed to save response", "Hook", err);
-                  });
-                }
-              } catch (error) {
-                logger.error(
-                  "Error handling processed audio event",
-                  "Hook",
-                  error instanceof Error ? error : new Error(String(error))
-                );
-              }
-            }
-          );
-          listenerRemovers.push(processedListener);
-          logger.debug("Registered bleAudioProcessed listener via Capacitor", "Hook");
-
-          const transcriptionListener = await BackgroundServiceNative.addListener(
-            "bleTranscription",
-            (eventData: BleEventData) => {
-              try {
-                const transcription = eventData.data;
-                if (transcription) {
-                  setLastTranscription(transcription);
-                  logger.debug("Native processing transcription received", "Hook");
-                  appendMessage({
-                    role: "user",
-                    text: transcription,
-                    timestamp: Date.now(),
-                  }).catch((err) => {
-                    logger.error("Failed to save transcription", "Hook", err);
-                  });
-                }
-              } catch (error) {
-                logger.error(
-                  "Error handling transcription event",
-                  "Hook",
-                  error instanceof Error ? error : new Error(String(error))
-                );
-              }
-            }
-          );
-          listenerRemovers.push(transcriptionListener);
-          logger.debug("Registered bleTranscription listener via Capacitor", "Hook");
-
-          const audioErrorListener = await BackgroundServiceNative.addListener(
-            "bleAudioError",
-            (eventData: BleEventData) => {
-              try {
-                const errorMsg = eventData.data || "Unknown error";
-                setLastError(errorMsg);
-                logger.error("Native processing error", "Hook", new Error(errorMsg));
-                toast({
-                  title: "Processing Error",
-                  description: errorMsg,
-                  variant: "destructive",
-                });
-              } catch (error) {
-                logger.error(
-                  "Error handling audio error event",
-                  "Hook",
-                  error instanceof Error ? error : new Error(String(error))
-                );
-              }
-            }
-          );
-          listenerRemovers.push(audioErrorListener);
-          logger.debug("Registered bleAudioError listener via Capacitor", "Hook");
-
+          listenerRemovers.push(...listeners);
           logger.info("All BackgroundService event listeners registered successfully", "Hook");
         } else {
-          logger.warn("BackgroundServiceNative.addListener not available, falling back to window events", "Hook");
-          
-          // Fallback to window events for web or if plugin not available
-          const handleNativeEvent = (event: Event) => {
-            const customEvent = event as CustomEvent;
-            const eventName = customEvent.detail?.name || customEvent.type;
-            const eventData = customEvent.detail || {};
-
-            switch (eventName) {
-              case "bleConnectionStateChanged":
-                handleConnectionState(eventData);
-                break;
-              case "bleAudioData":
-                handleAudioData(eventData);
-                break;
-              case "bleError":
-                handleError(eventData);
-                break;
-            }
-          };
-
-          window.addEventListener("bleConnectionStateChanged", handleNativeEvent);
-          window.addEventListener("bleAudioData", handleNativeEvent);
-          window.addEventListener("bleError", handleNativeEvent);
+          logger.warn("BackgroundServiceNative.addListener not available", "Hook");
         }
       } catch (error) {
         logger.error(
@@ -667,22 +549,15 @@ export function useBle(): UseBleReturn {
     setupNativeListeners();
 
     return () => {
-      // Cleanup: remove all registered listeners
-      listenerRemovers.forEach(async (listener) => {
-        try {
-          await listener.remove();
-        } catch (e) {
-          // Ignore cleanup errors
-        }
+      isCleanedUp = true;
+      logger.debug("Cleaning up native listeners", "Hook");
+      
+      Promise.all(listenerRemovers.map(l => l.remove())).catch(() => {
+        logger.debug("Error removing some listeners (may already be removed)", "Hook");
       });
-
-      // Also remove window event listeners if they were used as fallback
-      const noop = () => {};
-      window.removeEventListener("bleConnectionStateChanged", noop);
-      window.removeEventListener("bleAudioData", noop);
-      window.removeEventListener("bleError", noop);
+      listenerRemovers.length = 0;
     };
-  }, [processAudio]);
+  }, []); // Empty deps - only run once on mount
 
   const initializeBle = useCallback(async () => {
     if (isInitialized.current) return;
@@ -698,28 +573,28 @@ export function useBle(): UseBleReturn {
             logger.debug("TimeSyncService started", "Hook");
 
             if (backgroundService.getIsEnabled()) {
-              logger.debug("Foreground Service ya está activo", "Hook");
+              logger.debug("Foreground Service already active", "Hook");
             } else {
               logger.warn(
-                "⚠️ Foreground Service no está activo, intentando iniciarlo...",
+                "Foreground Service not active, attempting to start...",
                 "Hook"
               );
               try {
                 await backgroundService.enable();
                 logger.info(
-                  "Foreground Service iniciado después de conectar",
+                  "Foreground Service started after connect",
                   "Hook"
                 );
               } catch (error) {
                 logger.error(
-                  "Error al habilitar servicio de background",
+                  "Error enabling background service",
                   "Hook",
                   error instanceof Error ? error : new Error(String(error))
                 );
                 toast({
-                  title: "Advertencia",
+                  title: "Warning",
                   description:
-                    "El servicio de background no pudo iniciarse. La conexión puede perderse en segundo plano.",
+                    "Background service could not start. Connection may be lost in background.",
                   variant: "destructive",
                 });
               }
@@ -738,7 +613,7 @@ export function useBle(): UseBleReturn {
                   );
                   await backgroundService.connectBleDevice(deviceId);
                   logger.info(
-                    `✅ BLE device connected to native background service: ${deviceId}`,
+                    `BLE device connected to native background service: ${deviceId}`,
                     "Hook"
                   );
                 } catch (error) {
@@ -747,17 +622,7 @@ export function useBle(): UseBleReturn {
                     "Hook"
                   );
                 }
-              } else {
-                logger.debug(
-                  `Skipping native BLE connection - invalid deviceId format: ${deviceId}`,
-                  "Hook"
-                );
               }
-            } else {
-              logger.debug(
-                "Skipping native BLE connection - mock mode enabled",
-                "Hook"
-              );
             }
 
             toast({
@@ -1032,7 +897,7 @@ export function useBle(): UseBleReturn {
     } finally {
       setIsProcessing(false);
     }
-  }, []);
+  }, [connectionState]);
 
   const sendTextMessage = useCallback(async (text: string) => {
     if (!text.trim()) {
@@ -1118,6 +983,11 @@ export function useBle(): UseBleReturn {
       bleManager.disconnect();
       activeSessionId.current = null;
       isProcessingRequest.current = false;
+      
+      if (processingTimeoutRef.current) {
+        clearTimeout(processingTimeoutRef.current);
+        processingTimeoutRef.current = null;
+      }
     };
   }, [initializeBle]);
 

@@ -18,7 +18,7 @@ const queryClient = new QueryClient();
 
 const AppComponent = () => {
   useEffect(() => {
-    // Start Foreground Service on app startup (Android only) - sin delay
+    // Start Foreground Service on app startup (Android only)
     if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android') {
       // Configure backend token and preset for native processing
       Promise.all([
@@ -55,6 +55,15 @@ const AppComponent = () => {
         } else {
           logger.info('App moved to background - maintaining BLE connection', 'App');
           
+          // Cancel any pending API requests when going to background
+          if (typeof window !== 'undefined') {
+            const w = window as any;
+            if (w.cancelAllRequests) {
+              w.cancelAllRequests();
+              logger.debug('Cancelled pending API requests on background', 'App');
+            }
+          }
+          
           // Ensure background service is active
           if (Capacitor.getPlatform() === 'android') {
             try {
@@ -75,6 +84,19 @@ const AppComponent = () => {
         App.removeAllListeners();
       };
     }
+  }, []);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (typeof window !== 'undefined') {
+        const w = window as any;
+        if (w.cancelAllRequests) {
+          w.cancelAllRequests();
+          logger.debug('Cancelled all requests on app unmount', 'App');
+        }
+      }
+    };
   }, []);
 
   return (

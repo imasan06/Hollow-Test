@@ -120,6 +120,7 @@ export function invalidateApiCache(): void {
 }
 
 const inFlightRequests = new Map<string, Promise<TranscribeResponse>>();
+const activeControllers = new Map<string, AbortController>();
 
 function getRequestKey(request: TranscribeRequest): string {
   const text = request.text || "";
@@ -131,10 +132,40 @@ function getRequestKey(request: TranscribeRequest): string {
   return `${text}_${audio}_${contextHash}`;
 }
 
+// Export function to cancel all requests (useful for cleanup)
+export function cancelAllRequests(): void {
+  logger.debug("Cancelling all in-flight requests", "API");
+  activeControllers.forEach((controller, key) => {
+    try {
+      controller.abort();
+      logger.debug(`Cancelled request: ${key}`, "API");
+    } catch (e) {
+      // Ignore errors during cancellation
+    }
+  });
+  activeControllers.clear();
+  inFlightRequests.clear();
+}
+
+// Expose cancellation globally for cleanup
+if (typeof window !== "undefined") {
+  (window as any).cancelAllRequests = cancelAllRequests;
+}
+
 export async function sendTranscription(
   request: TranscribeRequest
 ): Promise<TranscribeResponse> {
   const requestKey = getRequestKey(request);
+  
+  // Cancel any existing request with same key
+  const existingController = activeControllers.get(requestKey);
+  if (existingController) {
+    logger.debug("Cancelling duplicate request", "API");
+    existingController.abort();
+    activeControllers.delete(requestKey);
+  }
+  
+  // Check for in-flight requests
   if (inFlightRequests.has(requestKey)) {
     logger.debug(
       "Duplicate request detected, reusing in-flight request",
@@ -144,6 +175,9 @@ export async function sendTranscription(
   }
 
   const requestPromise = (async () => {
+    const controller = new AbortController();
+    activeControllers.set(requestKey, controller);
+
     try {
       const [user_id, activePreset] = await Promise.all([
         getUserId(),
@@ -173,22 +207,6 @@ export async function sendTranscription(
         typeof document !== "undefined" &&
         (document.visibilityState === "hidden" || !document.hasFocus());
 
-      let conversationContext = request.context;
-      if (!conversationContext) {
-        conversationContext = await formatConversationContext(true);
-      }
-
-      if (!isBackground || import.meta.env.DEV) {
-        if (conversationContext) {
-          logger.debug(
-            `Conversation context: ${conversationContext.length} chars`,
-            "API"
-          );
-        } else {
-          logger.warn("No conversation context available", "API");
-        }
-      }
-
       const backendPayload: any = {
         user_id: user_id,
         persona: persona,
@@ -203,12 +221,13 @@ export async function sendTranscription(
         logger.debug("Using provided text as transcript", "API");
       }
 
-      if (conversationContext && conversationContext.trim().length > 0) {
-        backendPayload.context = conversationContext;
+      // Add context only if provided
+      if (request.context && request.context.trim().length > 0) {
+        backendPayload.context = request.context;
 
         if (!isBackground || import.meta.env.DEV) {
           logger.debug(
-            `Context added to payload (${conversationContext.length} chars)`,
+            `Context added to payload (${request.context.length} chars)`,
             "API"
           );
         }
@@ -219,20 +238,9 @@ export async function sendTranscription(
 
       const chatRequestStart = performance.now();
 
-      const connectTimeout = hasAudio
-        ? isBackground
-          ? 30000
-          : 60000
-        : isBackground
-        ? 15000
-        : 30000;
-      const readTimeout = hasAudio
-        ? isBackground
-          ? 120000
-          : 180000
-        : isBackground
-        ? 45000
-        : 60000;
+      // Reduced timeouts for faster failure detection
+      const connectTimeout = 20000; // 20s (was 30-60s)
+      const readTimeout = hasAudio ? 90000 : 45000; // 90s/45s (was 120-180s)
 
       if (!isBackground || import.meta.env.DEV) {
         logger.debug(
@@ -340,15 +348,8 @@ export async function sendTranscription(
         }
       }
 
-      const controller = new AbortController();
-
-      const fetchTimeout = hasAudio
-        ? isBackground
-          ? 120000
-          : 180000
-        : isBackground
-        ? 45000
-        : 60000;
+      // Web fallback
+      const fetchTimeout = hasAudio ? 90000 : 45000;
       const timeoutId = setTimeout(() => controller.abort(), fetchTimeout);
 
       const response = await fetch(url, {
@@ -395,6 +396,12 @@ export async function sendTranscription(
 
       return normalizedData;
     } catch (error) {
+      // Don't log cancellation errors as errors
+      if ((error as any).name === 'AbortError') {
+        logger.debug("Request was cancelled", "API");
+        throw new Error("Request cancelled");
+      }
+      
       logger.error(
         "Transcription request failed",
         "API",
@@ -403,6 +410,7 @@ export async function sendTranscription(
       throw error;
     } finally {
       inFlightRequests.delete(requestKey);
+      activeControllers.delete(requestKey);
     }
   })();
 
