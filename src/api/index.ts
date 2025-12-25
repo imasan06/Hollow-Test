@@ -17,7 +17,7 @@ let cachedActivePreset: {
   rules: string;
 } | null = null;
 let presetCacheTime = 0;
-const PRESET_CACHE_TTL = 30000;
+const PRESET_CACHE_TTL = 5000; // Reducido de 30000 a 5000 (5 segundos)
 
 export function getBackendSharedToken(): string | null {
   if (cachedBackendToken) return cachedBackendToken;
@@ -105,16 +105,28 @@ async function getCachedActivePreset(): Promise<{
 }> {
   const now = Date.now();
   if (cachedActivePreset && now - presetCacheTime < PRESET_CACHE_TTL) {
+    logger.debug(
+      `Using cached preset: ${cachedActivePreset.name} (age: ${now - presetCacheTime}ms)`,
+      "API"
+    );
     return cachedActivePreset;
   }
 
+  logger.debug("Fetching fresh preset from storage", "API");
   const preset = await getActivePreset();
   cachedActivePreset = preset;
   presetCacheTime = now;
+  
+  logger.debug(
+    `Preset loaded: ${preset.name} (persona: ${preset.persona.substring(0, 50)}...)`,
+    "API"
+  );
+  
   return preset;
 }
 
 export function invalidateApiCache(): void {
+  logger.debug("Invalidating API cache", "API");
   cachedActivePreset = null;
   presetCacheTime = 0;
 }
@@ -221,16 +233,18 @@ export async function sendTranscription(
         logger.debug("Using provided text as transcript", "API");
       }
 
-      // Add context only if provided
-      if (request.context && request.context.trim().length > 0) {
+      // Asegurar que el contexto se incluya siempre, incluso si está vacío
+      if (request.context !== undefined) {
         backendPayload.context = request.context;
-
-        if (!isBackground || import.meta.env.DEV) {
-          logger.debug(
-            `Context added to payload (${request.context.length} chars)`,
-            "API"
-          );
-        }
+        
+        logger.debug(
+          `Context included in payload (${request.context.length} chars)`,
+          "API"
+        );
+      } else {
+        // Si no hay contexto, enviar string vacío para que el backend sepa que no hay historial
+        backendPayload.context = "";
+        logger.debug("No context provided, sending empty string", "API");
       }
 
       const url = `${API_ENDPOINT}/v1/chat`;
@@ -242,19 +256,16 @@ export async function sendTranscription(
       const connectTimeout = 20000; // 20s (was 30-60s)
       const readTimeout = hasAudio ? 90000 : 45000; // 90s/45s (was 120-180s)
 
-      if (!isBackground || import.meta.env.DEV) {
+      logger.debug(
+        `Sending chat request with payload keys: ${Object.keys(backendPayload).join(", ")}`,
+        "API"
+      );
+      
+      if (backendPayload.context) {
         logger.debug(
-          `Sending chat request with payload keys: ${Object.keys(
-            backendPayload
-          ).join(", ")}`,
+          `Payload context preview: ${backendPayload.context.substring(0, 100)}...`,
           "API"
         );
-        if (backendPayload.context) {
-          logger.debug(
-            `Payload includes context: ${backendPayload.context.length} chars`,
-            "API"
-          );
-        }
       }
 
       if (isNative) {

@@ -244,90 +244,52 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
       if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android") {
         logger.debug("Using native audio processing", "AudioRecorder");
         
-        // NOTE: Don't set up listeners here - useBle.ts already handles bleAudioProcessed, bleTranscription, and bleAudioError
-        // Setting up duplicate listeners causes messages to be saved twice
+        // ⚠️ PROBLEMA: Los listeners aquí están duplicando el guardado de mensajes
+        // ✅ SOLUCIÓN: Remover los listeners de aquí porque ya existen en useBle.ts
+        // Los listeners en useBle.ts manejarán bleAudioProcessed, bleTranscription, y bleAudioError
         
-        // Set up only UI update listeners (not message saving)
-        const processedListener = await BackgroundServiceNative?.addListener(
-          "bleAudioProcessed",
-          (eventData: any) => {
-            const response = eventData.data;
-            if (response) {
-              setLastResponse(response);
-              // Don't save here - useBle.ts already handles it
-            }
-          }
-        );
-
-        const transcriptionListener = await BackgroundServiceNative?.addListener(
-          "bleTranscription",
-          (eventData: any) => {
-            const transcription = eventData.data;
-            if (transcription) {
-              setLastTranscription(transcription);
-              // Don't save here - useBle.ts already handles it
-            }
-          }
-        );
-
-        const errorListener = await BackgroundServiceNative?.addListener(
-          "bleAudioError",
-          (eventData: any) => {
-            const errorMsg = eventData.data || "Unknown error";
-            setError(errorMsg);
-            toast({
-              title: "Processing Error",
-              description: errorMsg,
-              variant: "destructive",
-            });
-            setIsProcessing(false);
-          }
-        );
-
-        // Get conversation context before processing
+        // ✅ FIX 1: Obtener el contexto ANTES de enviar a procesamiento nativo
         const { formatConversationContext } = await import(
           "@/storage/conversationStore"
         );
-        const conversationContext = await formatConversationContext(true);
+        const conversationContext = await formatConversationContext(false);
+        
+        logger.debug(
+          `Context for native processing: ${conversationContext ? conversationContext.length : 0} chars`,
+          "AudioRecorder"
+        );
 
-        // Process natively with context
+        // ✅ FIX 2: Process natively with context
         const result = await backgroundService.processAudioNative(
           wavBase64,
-          conversationContext || undefined
+          conversationContext || "" // Pasar string vacío en lugar de undefined
         );
+        
         if (!result.success) {
           throw new Error("Native processing failed");
         }
 
-        // Clean up listeners after a timeout (processing should complete quickly)
-        setTimeout(() => {
-          processedListener?.remove();
-          transcriptionListener?.remove();
-          errorListener?.remove();
-        }, 30000); // 30 seconds timeout
-
-        logger.debug("Native processing initiated", "AudioRecorder");
+        // ✅ FIX 3: NO configurar listeners aquí - ya existen en useBle.ts
+        // Los listeners en useBle.ts manejarán bleAudioProcessed, bleTranscription, y bleAudioError
+        
+        logger.debug("Native processing initiated with context", "AudioRecorder");
         // Don't set isProcessing to false here - wait for the result events
         return;
       }
 
       // Fallback to JavaScript processing (web or if native fails)
-      logger.debug(
-        "Using JavaScript audio processing",
-        "AudioRecorder"
-      );
+      logger.debug("Using JavaScript audio processing", "AudioRecorder");
 
-      const context = await formatConversationContext();
+      // ✅ FIX 4: Asegurar contexto en procesamiento JS
+      const context = await formatConversationContext(false);
       logger.debug(
-        `Context for AI request: ${
-          context ? `${context.length} chars` : "empty"
-        }`,
+        `Context for AI request: ${context ? `${context.length} chars` : "empty"}`,
         "AudioRecorder"
       );
 
       const chatResponse = await sendTranscription({
         audio: wavBase64,
-        context: context || undefined,
+        context: context || "", // Pasar string vacío en lugar de undefined
       });
 
       if (chatResponse.error) {

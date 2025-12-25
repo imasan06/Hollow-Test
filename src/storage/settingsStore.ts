@@ -1,5 +1,6 @@
 import { Preferences } from "@capacitor/preferences";
 import { logger } from "@/utils/logger";
+import { invalidateApiCache } from "@/api";
 
 const SETTINGS_STORAGE_KEY = "app_settings";
 const DEFAULT_PERSONA = "You are a helpful AI assistant for the Hollow Watch.";
@@ -256,6 +257,12 @@ export async function updatePreset(
 
   await saveSettings(settings);
   logger.debug(`Updated preset: ${settings.personas[index].name}`, "Settings");
+  
+  // Si actualizamos el preset activo, invalidar cache
+  if (id === settings.activePersonaId) {
+    invalidateApiCache();
+    logger.debug("Active preset updated, cache invalidated", "Settings");
+  }
 }
 
 export async function deletePreset(id: string): Promise<void> {
@@ -302,7 +309,11 @@ export async function setActivePreset(id: string): Promise<void> {
 
   settings.activePersonaId = id;
   await saveSettings(settings);
-  logger.debug(`Set active preset: ${preset.name}`, "Settings");
+  
+  // Invalidar cache de API para que use el nuevo preset inmediatamente
+  invalidateApiCache();
+  
+  logger.debug(`Set active preset: ${preset.name} (cache invalidated)`, "Settings");
 }
 
 export async function duplicatePreset(

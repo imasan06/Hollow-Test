@@ -221,13 +221,20 @@ export function useBle(): UseBleReturn {
           }
 
           const contextStart = performance.now();
-          const conversationContext = await formatConversationContext(true);
+          // Asegurar que excludeLastUserMessage sea false para incluir TODO el contexto
+          const conversationContext = await formatConversationContext(false);
           const contextTime = performance.now() - contextStart;
 
+          logger.debug(
+            `Context prepared: ${conversationContext ? conversationContext.length : 0} chars`,
+            "Hook"
+          );
+
           const apiCallStart = performance.now();
+          // Asegurar que el contexto se pase incluso si está vacío
           apiResponse = await sendTranscription({
             audio: wavBase64,
-            context: conversationContext || undefined,
+            context: conversationContext || "", // Pasar string vacío en lugar de undefined
           });
           const apiCallTime = performance.now() - apiCallStart;
 
@@ -236,7 +243,7 @@ export function useBle(): UseBleReturn {
           }
 
           logger.info(
-            `[TIMING] Audio: ${audioProcessingTime.toFixed(2)}ms | Context: ${contextTime.toFixed(2)}ms | API: ${apiCallTime.toFixed(2)}ms`,
+            `[TIMING] Audio: ${audioProcessingTime.toFixed(2)}ms | Context: ${contextTime.toFixed(2)}ms (${conversationContext?.length || 0} chars) | API: ${apiCallTime.toFixed(2)}ms`,
             "Hook"
           );
 
@@ -800,8 +807,12 @@ export function useBle(): UseBleReturn {
           "Hook"
         );
 
+        // Agregar contexto aquí también
+        const conversationContext = await formatConversationContext(false);
+        
         const apiResponse = await sendTranscription({
           text: text.trim(),
+          context: conversationContext || "",
         });
 
         if (apiResponse.error) {
@@ -840,7 +851,13 @@ export function useBle(): UseBleReturn {
         return;
       }
 
-      const apiResponse = await sendTranscription({ audio: wavBase64 });
+      // Agregar contexto al enviar con audio TTS
+      const conversationContext = await formatConversationContext(false);
+      
+      const apiResponse = await sendTranscription({ 
+        audio: wavBase64,
+        context: conversationContext || "",
+      });
 
       if (apiResponse.error) {
         throw new Error(apiResponse.error);
@@ -921,7 +938,13 @@ export function useBle(): UseBleReturn {
         description: "Sending message to AI backend",
       });
 
-      const apiResponse = await sendTranscription({ text: text.trim() });
+      // Agregar contexto aquí
+      const conversationContext = await formatConversationContext(false);
+      
+      const apiResponse = await sendTranscription({ 
+        text: text.trim(),
+        context: conversationContext || "",
+      });
 
       if (apiResponse.error) {
         throw new Error(apiResponse.error);

@@ -62,11 +62,10 @@ export async function appendMessage(
         : 0;
 
       // Ensure new message has a timestamp greater than the latest one
-      // This guarantees chronological order: user message -> assistant response
       const baseTimestamp = message.timestamp || Date.now();
       const newTimestamp = baseTimestamp > latestTimestamp 
         ? baseTimestamp 
-        : latestTimestamp + 1; // Add 1ms to ensure it's after the latest message
+        : latestTimestamp + 1;
 
       const newMessage = {
         role: message.role,
@@ -84,7 +83,7 @@ export async function appendMessage(
       if (isDuplicate) {
         logger.debug(
           `Skipping duplicate message with timestamp ${newMessage.timestamp}`,
-          "Storage"
+          "ConversationStore"
         );
         return;
       }
@@ -102,16 +101,25 @@ export async function appendMessage(
       });
 
       logger.debug(
-        `Saved ${message.role} message: "${newMessage.text.substring(
+        `✅ Saved ${message.role} message: "${newMessage.text.substring(
           0,
           50
-        )}..." at timestamp ${newMessage.timestamp}. Total turns: ${limitedHistory.length}`,
-        "Storage"
+        )}..." at timestamp ${newTimestamp}. Total: ${limitedHistory.length} messages`,
+        "ConversationStore"
       );
+      
+      // Log history preview after save
+      if (limitedHistory.length > 0) {
+        const lastFew = limitedHistory.slice(-3);
+        logger.debug(
+          `Last 3 messages: ${lastFew.map(m => `${m.role}:"${m.text.substring(0, 30)}..."`).join("; ")}`,
+          "ConversationStore"
+        );
+      }
     } catch (error) {
       logger.error(
         "Error saving message",
-        "Storage",
+        "ConversationStore",
         error instanceof Error ? error : new Error(String(error))
       );
       throw error;
@@ -278,10 +286,19 @@ export async function formatConversationContext(
       ? trimmed.substring(0, 1000) + "..."
       : trimmed;
     contextParts.push(limited);
+    logger.debug(
+      `Added persistent context: ${limited.length} chars`,
+      "ConversationStore"
+    );
   }
 
   // Get recent messages
   const allMessages = await getLastTurns(MAX_CONTEXT_TURNS);
+  
+  logger.debug(
+    `Retrieved ${allMessages.length} messages for context`,
+    "ConversationStore"
+  );
 
   if (allMessages.length > 0) {
     const sortedMessages = allMessages.sort(
@@ -293,17 +310,27 @@ export async function formatConversationContext(
       const lastMessage = sortedMessages[sortedMessages.length - 1];
       if (lastMessage.role === "user") {
         messagesToFormat = sortedMessages.slice(0, -1);
+        logger.debug(
+          "Excluded last user message from context",
+          "ConversationStore"
+        );
       }
     }
 
     // Take only most recent messages
     const contextMessages = messagesToFormat.slice(-MAX_CONTEXT_TURNS);
+    
+    logger.debug(
+      `Formatting ${contextMessages.length} messages for context`,
+      "ConversationStore"
+    );
 
     // Format messages concisely
     const formattedMessages = contextMessages
       .map((msg) => {
-        // Use shorter role labels to save space
-        const roleLabel = msg.role === "user" ? "U" : "A";
+        // Use full role labels to match backend expectation (USER/ASSISTANT)
+        // This matches the format used in BackgroundService.java
+        const roleLabel = msg.role === "user" ? "USER" : "ASSISTANT";
         // Truncate very long messages
         const text = msg.text.length > 500 
           ? msg.text.substring(0, 500) + "..."
@@ -314,13 +341,24 @@ export async function formatConversationContext(
 
     if (formattedMessages.trim().length > 0) {
       contextParts.push(formattedMessages);
+      logger.debug(
+        `Added messages to context: ${formattedMessages.length} chars`,
+        "ConversationStore"
+      );
     }
+  } else {
+    logger.debug("No messages in history for context", "ConversationStore");
   }
 
   let formatted = contextParts.join("\n\n");
 
   // Aggressive truncation if needed
   if (formatted.length > MAX_CONTEXT_CHARS) {
+    logger.debug(
+      `Context too large (${formatted.length} chars), truncating to ${MAX_CONTEXT_CHARS}`,
+      "ConversationStore"
+    );
+    
     // Try to truncate from the beginning while preserving persistent context
     if (persistentContext && persistentContext.length > MAX_CONTEXT_CHARS / 2) {
       const messagesPart = contextParts.length > 1 ? contextParts[1] : "";
@@ -355,6 +393,19 @@ export async function formatConversationContext(
         formatted = formatted.substring(firstNewline + 2);
       }
     }
+  }
+
+  logger.debug(
+    `Final context: ${formatted.length} chars (excludeLastUser: ${excludeLastUserMessage})`,
+    "ConversationStore"
+  );
+  
+  // Log preview of context
+  if (formatted.length > 0) {
+    logger.debug(
+      `Context preview: ${formatted.substring(0, 150)}...`,
+      "ConversationStore"
+    );
   }
 
   return formatted;
