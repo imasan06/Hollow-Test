@@ -15,6 +15,7 @@ let cachedActivePreset: {
   name: string;
   persona: string;
   rules: string;
+  baseRules: string;
 } | null = null;
 let presetCacheTime = 0;
 const PRESET_CACHE_TTL = 5000; // Reducido de 30000 a 5000 (5 segundos)
@@ -102,6 +103,7 @@ async function getCachedActivePreset(): Promise<{
   name: string;
   persona: string;
   rules: string;
+  baseRules: string;
 }> {
   const now = Date.now();
   if (cachedActivePreset && now - presetCacheTime < PRESET_CACHE_TTL) {
@@ -198,6 +200,7 @@ export async function sendTranscription(
 
       const persona = request.persona || activePreset.persona || "";
       const rules = request.rules || activePreset.rules || "";
+      const baseRules = request.baserules || activePreset.baseRules || "";
 
       logger.debug(`Using persona preset: "${activePreset.name}"`, "API");
 
@@ -223,6 +226,7 @@ export async function sendTranscription(
         user_id: user_id,
         persona: persona,
         rules: rules,
+        baserules: baseRules,
       };
 
       if (hasAudio) {

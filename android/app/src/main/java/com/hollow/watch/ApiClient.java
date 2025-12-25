@@ -57,6 +57,7 @@ public class ApiClient {
      * @param userId User ID
      * @param persona Persona string
      * @param rules Rules string
+     * @param baseRules Base rules string
      * @param context Optional conversation context
      * @return ChatResponse with text, transcription, and error
      */
@@ -65,6 +66,7 @@ public class ApiClient {
         String userId,
         String persona,
         String rules,
+        String baseRules,
         String context
     ) {
         try {
@@ -77,6 +79,9 @@ public class ApiClient {
             }
             if (rules != null && !rules.isEmpty()) {
                 payload.put("rules", rules);
+            }
+            if (baseRules != null && !baseRules.isEmpty()) {
+                payload.put("baserules", baseRules);
             }
             if (context == null) {
                 Log.d(TAG, "Context is null - not sending context to backend");

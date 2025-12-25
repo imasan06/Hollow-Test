@@ -26,11 +26,12 @@ interface BackgroundServicePlugin {
   removeAllListeners(): Promise<void>;
   /** Test method to simulate BLE audio flow without a real device */
   testAudioFlow(): Promise<{ success: boolean; audioSize: number; base64Size: number }>;
-  /** Set backend configuration (token, persona, rules) for native processing */
+  /** Set backend configuration (token, persona, rules, baseRules) for native processing */
   setBackendConfig(options: {
     backendToken?: string;
     persona?: string;
     rules?: string;
+    baseRules?: string;
   }): Promise<{ success: boolean }>;
   /** Process WAV audio natively (for recorded audio) */
   processAudioNative(options: {
@@ -439,6 +440,7 @@ class BackgroundService {
     backendToken?: string;
     persona?: string;
     rules?: string;
+    baseRules?: string;
   }): Promise<{ success: boolean }> {
     if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android") {
       try {

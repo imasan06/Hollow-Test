@@ -315,6 +315,7 @@ public class BackgroundServicePlugin extends Plugin {
             String backendToken = call.getString("backendToken");
             String persona = call.getString("persona");
             String rules = call.getString("rules");
+            String baseRules = call.getString("baseRules");
             
             android.content.SharedPreferences prefs = getContext().getSharedPreferences("_capacitor_preferences", android.content.Context.MODE_PRIVATE);
             android.content.SharedPreferences.Editor editor = prefs.edit();
@@ -328,6 +329,9 @@ public class BackgroundServicePlugin extends Plugin {
             }
             if (rules != null) {
                 editor.putString("active_rules", rules);
+            }
+            if (baseRules != null) {
+                editor.putString("active_baserules", baseRules);
             }
             
             editor.apply();

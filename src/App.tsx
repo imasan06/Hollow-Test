@@ -29,7 +29,8 @@ const AppComponent = () => {
           backgroundService.setBackendConfig({
             backendToken: token,
             persona: preset.persona || '',
-            rules: preset.rules || ''
+            rules: preset.rules || '',
+            baseRules: preset.baseRules || ''
           }).catch((error) => {
             logger.warn('Failed to set backend config', 'App', error instanceof Error ? error : new Error(String(error)));
           });

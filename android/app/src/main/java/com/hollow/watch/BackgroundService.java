@@ -456,6 +456,7 @@ public class BackgroundService extends Service {
                 String backendToken = getBackendToken();
                 String persona = getPersona();
                 String rules = getRules();
+                String baseRules = getBaseRules();
                 
                 if (backendToken == null || backendToken.isEmpty()) {
                     android.util.Log.e("BackgroundService", "Backend token not found - cannot process audio");
@@ -473,6 +474,7 @@ public class BackgroundService extends Service {
                     userId,
                     persona,
                     rules,
+                    baseRules,
                     null // context - can be added later if needed
                 );
                 
@@ -585,6 +587,19 @@ public class BackgroundService extends Service {
             return prefs.getString("active_rules", "");
         } catch (Exception e) {
             android.util.Log.w("BackgroundService", "Error getting rules: " + e.getMessage());
+            return "";
+        }
+    }
+    
+    /**
+     * Get baseRules from SharedPreferences
+     */
+    private String getBaseRules() {
+        try {
+            SharedPreferences prefs = getSharedPreferences("_capacitor_preferences", MODE_PRIVATE);
+            return prefs.getString("active_baserules", "");
+        } catch (Exception e) {
+            android.util.Log.w("BackgroundService", "Error getting baseRules: " + e.getMessage());
             return "";
         }
     }
@@ -734,6 +749,7 @@ public class BackgroundService extends Service {
             String backendToken = prefs.getString("backend_shared_token", null);
             String persona = prefs.getString("active_persona", "");
             String rules = prefs.getString("active_rules", "");
+            String baseRules = prefs.getString("active_baserules", "");
             
             if (backendToken == null || backendToken.isEmpty()) {
                 android.util.Log.e("BackgroundService", "Backend token not found - cannot process audio");
@@ -831,6 +847,7 @@ public class BackgroundService extends Service {
                 userId,
                 persona,
                 rules,
+                baseRules,
                 contextText // Send formatted conversation history as context
             );
             
@@ -887,6 +904,7 @@ public class BackgroundService extends Service {
         String backendToken;
         String persona;
         String rules;
+        String baseRules;
     }
     
     private static BackendConfig readBackendConfig(Context context) {
@@ -897,6 +915,7 @@ public class BackgroundService extends Service {
         config.backendToken = prefs.getString("backend_shared_token", "");
         config.persona = prefs.getString("active_persona", "");
         config.rules = prefs.getString("active_rules", "");
+        config.baseRules = prefs.getString("active_baserules", "");
     
         android.util.Log.d(
             "BackgroundService",
@@ -904,6 +923,8 @@ public class BackgroundService extends Service {
                 + (config.persona != null && !config.persona.isEmpty())
                 + " rules="
                 + (config.rules != null && !config.rules.isEmpty())
+                + " baseRules="
+                + (config.baseRules != null && !config.baseRules.isEmpty())
         );
     
         return config;
