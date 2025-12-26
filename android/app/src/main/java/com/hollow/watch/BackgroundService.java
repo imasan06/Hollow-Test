@@ -568,6 +568,15 @@ public class BackgroundService extends Service {
                 long totalTime = System.currentTimeMillis() - startTime;
                 android.util.Log.d("BackgroundService", "Complete native processing took " + totalTime + "ms");
                 
+                // Step 6: Save messages directly to SharedPreferences (works even when JavaScript is paused)
+                if (response.transcription != null && !response.transcription.isEmpty() && 
+                    response.text != null && !response.text.isEmpty()) {
+                    saveConversationMessagesNative(
+                        response.transcription,
+                        response.text
+                    );
+                }
+                
                 // Notify JavaScript (optional - for UI updates)
                 notifyJavaScript("bleAudioProcessed", response.text);
                 
@@ -946,6 +955,16 @@ public class BackgroundService extends Service {
             long totalTime = System.currentTimeMillis() - startTime;
             android.util.Log.d("BackgroundService", "Complete native processing took " + totalTime + "ms");
             
+            // Save messages directly to SharedPreferences (works even when JavaScript is paused)
+            if (response.transcription != null && !response.transcription.isEmpty() && 
+                response.text != null && !response.text.isEmpty()) {
+                saveConversationMessagesNativeStatic(
+                    context,
+                    response.transcription,
+                    response.text
+                );
+            }
+            
             // Notify JavaScript with results
             notifyJavaScriptStatic(context, "bleAudioProcessed", response.text);
             if (response.transcription != null) {
@@ -986,6 +1005,133 @@ public class BackgroundService extends Service {
         return config;
     }
     
+    
+    /**
+     * Save conversation messages directly to SharedPreferences (native implementation)
+     * This works even when JavaScript is paused in background/sleep mode
+     */
+    private void saveConversationMessagesNative(String transcription, String response) {
+        try {
+            SharedPreferences prefs = getSharedPreferences("_capacitor_preferences", MODE_PRIVATE);
+            String existingHistoryJson = prefs.getString("conversation_history", "[]");
+            
+            org.json.JSONArray historyArray;
+            try {
+                historyArray = new org.json.JSONArray(existingHistoryJson);
+            } catch (org.json.JSONException e) {
+                android.util.Log.w("BackgroundService", "Invalid conversation_history JSON, starting fresh: " + e.getMessage());
+                historyArray = new org.json.JSONArray();
+            }
+            
+            long now = System.currentTimeMillis();
+            
+            // Add user message (transcription)
+            org.json.JSONObject userMsg = new org.json.JSONObject();
+            userMsg.put("role", "user");
+            userMsg.put("text", transcription);
+            userMsg.put("timestamp", now);
+            historyArray.put(userMsg);
+            
+            // Add assistant message (response)
+            org.json.JSONObject assistantMsg = new org.json.JSONObject();
+            assistantMsg.put("role", "assistant");
+            assistantMsg.put("text", response);
+            assistantMsg.put("timestamp", now + 1); // Ensure order
+            historyArray.put(assistantMsg);
+            
+            // Limit to last 20 messages (MAX_CONVERSATION_TURNS)
+            int maxMessages = 20;
+            if (historyArray.length() > maxMessages) {
+                org.json.JSONArray limitedArray = new org.json.JSONArray();
+                int startIndex = historyArray.length() - maxMessages;
+                for (int i = startIndex; i < historyArray.length(); i++) {
+                    limitedArray.put(historyArray.get(i));
+                }
+                historyArray = limitedArray;
+            }
+            
+            // Save using commit() for synchronous write (critical for background)
+            SharedPreferences.Editor editor = prefs.edit();
+            editor.putString("conversation_history", historyArray.toString());
+            boolean success = editor.commit(); // Synchronous write
+            
+            if (success) {
+                android.util.Log.d("BackgroundService", 
+                    "✅ Saved conversation messages natively: user \"" + 
+                    transcription.substring(0, Math.min(30, transcription.length())) + 
+                    "...\" and assistant \"" + 
+                    response.substring(0, Math.min(30, response.length())) + 
+                    "...\" (total: " + historyArray.length() + " messages)");
+            } else {
+                android.util.Log.e("BackgroundService", "Failed to save conversation messages (commit returned false)");
+            }
+        } catch (Exception e) {
+            android.util.Log.e("BackgroundService", "Error saving conversation messages natively: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Static version for use in processWavBase64
+     */
+    private static void saveConversationMessagesNativeStatic(Context context, String transcription, String response) {
+        try {
+            SharedPreferences prefs = context.getSharedPreferences("_capacitor_preferences", Context.MODE_PRIVATE);
+            String existingHistoryJson = prefs.getString("conversation_history", "[]");
+            
+            org.json.JSONArray historyArray;
+            try {
+                historyArray = new org.json.JSONArray(existingHistoryJson);
+            } catch (org.json.JSONException e) {
+                android.util.Log.w("BackgroundService", "Invalid conversation_history JSON, starting fresh: " + e.getMessage());
+                historyArray = new org.json.JSONArray();
+            }
+            
+            long now = System.currentTimeMillis();
+            
+            // Add user message (transcription)
+            org.json.JSONObject userMsg = new org.json.JSONObject();
+            userMsg.put("role", "user");
+            userMsg.put("text", transcription);
+            userMsg.put("timestamp", now);
+            historyArray.put(userMsg);
+            
+            // Add assistant message (response)
+            org.json.JSONObject assistantMsg = new org.json.JSONObject();
+            assistantMsg.put("role", "assistant");
+            assistantMsg.put("text", response);
+            assistantMsg.put("timestamp", now + 1); // Ensure order
+            historyArray.put(assistantMsg);
+            
+            // Limit to last 20 messages (MAX_CONVERSATION_TURNS)
+            int maxMessages = 20;
+            if (historyArray.length() > maxMessages) {
+                org.json.JSONArray limitedArray = new org.json.JSONArray();
+                int startIndex = historyArray.length() - maxMessages;
+                for (int i = startIndex; i < historyArray.length(); i++) {
+                    limitedArray.put(historyArray.get(i));
+                }
+                historyArray = limitedArray;
+            }
+            
+            // Save using commit() for synchronous write (critical for background)
+            SharedPreferences.Editor editor = prefs.edit();
+            editor.putString("conversation_history", historyArray.toString());
+            boolean success = editor.commit(); // Synchronous write
+            
+            if (success) {
+                android.util.Log.d("BackgroundService", 
+                    "✅ Saved conversation messages natively: user \"" + 
+                    transcription.substring(0, Math.min(30, transcription.length())) + 
+                    "...\" and assistant \"" + 
+                    response.substring(0, Math.min(30, response.length())) + 
+                    "...\" (total: " + historyArray.length() + " messages)");
+            } else {
+                android.util.Log.e("BackgroundService", "Failed to save conversation messages (commit returned false)");
+            }
+        } catch (Exception e) {
+            android.util.Log.e("BackgroundService", "Error saving conversation messages natively: " + e.getMessage(), e);
+        }
+    }
     
     /**
      * Static helper to notify JavaScript
