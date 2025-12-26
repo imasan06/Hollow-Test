@@ -60,6 +60,15 @@ export function useBle(): UseBleReturn {
   const processingTimeoutRef = useRef<number | null>(null);
   const MAX_PROCESSING_TIME_MS = 30000; // Reduced from 180s to 30s
 
+  // Track pending messages from native processing to save them in correct order
+  const pendingNativeMessages = useRef<{
+    sessionId: string;
+    transcription: string | null;
+    response: string | null;
+    timestamp: number;
+  } | null>(null);
+  const pendingMessagesTimeoutRef = useRef<number | null>(null);
+
   const handlePersonaUpdateFromWatch = useCallback(async (data: string) => {
     try {
       const { upsertPresetByName, setActivePreset } = await import(
@@ -376,6 +385,82 @@ export function useBle(): UseBleReturn {
     const listenerRemovers: Array<{ remove: () => Promise<void> }> = [];
     let isCleanedUp = false;
 
+    // Helper function to save messages when both are available
+    const savePendingMessages = async (force: boolean = false) => {
+      const pending = pendingNativeMessages.current;
+      if (!pending) return;
+
+      // Clear timeout if we're saving
+      if (pendingMessagesTimeoutRef.current) {
+        clearTimeout(pendingMessagesTimeoutRef.current);
+        pendingMessagesTimeoutRef.current = null;
+      }
+
+      // Only save if we have both transcription and response, or if forced
+      if (pending.transcription && pending.response) {
+        const baseTimestamp = Date.now();
+        
+        try {
+          // Save user message first (transcription)
+          await appendMessage({
+            role: "user",
+            text: pending.transcription,
+            timestamp: baseTimestamp,
+          });
+          
+          // Then save assistant message (response)
+          await appendMessage({
+            role: "assistant",
+            text: pending.response,
+            timestamp: baseTimestamp + 1, // Ensure order
+          });
+          
+          logger.debug(
+            `✅ Saved native messages in correct order: user "${pending.transcription.substring(0, 30)}..." then assistant "${pending.response.substring(0, 30)}..."`,
+            "Hook"
+          );
+          
+          // Clear pending messages
+          pendingNativeMessages.current = null;
+        } catch (err) {
+          logger.error(
+            "Failed to save pending messages",
+            "Hook",
+            err instanceof Error ? err : new Error(String(err))
+          );
+        }
+      } else if (force) {
+        // If forced and we only have one message, save it anyway
+        if (pending.transcription) {
+          await appendMessage({
+            role: "user",
+            text: pending.transcription,
+            timestamp: Date.now(),
+          });
+        }
+        if (pending.response) {
+          await appendMessage({
+            role: "assistant",
+            text: pending.response,
+            timestamp: Date.now(),
+          });
+        }
+        pendingNativeMessages.current = null;
+      } else {
+        // Set timeout to force save after 5 seconds if one message is missing
+        if (pendingMessagesTimeoutRef.current) {
+          clearTimeout(pendingMessagesTimeoutRef.current);
+        }
+        pendingMessagesTimeoutRef.current = window.setTimeout(() => {
+          logger.warn(
+            "Timeout waiting for both messages, saving what we have",
+            "Hook"
+          );
+          savePendingMessages(true);
+        }, 5000);
+      }
+    };
+
     const setupNativeListeners = async () => {
       try {
         logger.debug("Setting up native BackgroundService event listeners", "Hook");
@@ -461,6 +546,7 @@ export function useBle(): UseBleReturn {
           }
         };
 
+
         const handleAudioProcessed = (eventData: BleEventData) => {
           if (isCleanedUp) return;
           try {
@@ -468,12 +554,23 @@ export function useBle(): UseBleReturn {
             if (response) {
               setLastResponse(response);
               logger.debug("Native processing response received", "Hook");
-              appendMessage({
-                role: "assistant",
-                text: response,
-                timestamp: Date.now(),
-              }).catch((err) => {
-                logger.error("Failed to save response", "Hook", err);
+              
+              // Initialize or update pending messages
+              const sessionId = activeSessionId.current || `native_${Date.now()}`;
+              if (!pendingNativeMessages.current) {
+                pendingNativeMessages.current = {
+                  sessionId,
+                  transcription: null,
+                  response: null,
+                  timestamp: Date.now(),
+                };
+              }
+              
+              pendingNativeMessages.current.response = response;
+              
+              // Try to save if transcription is already available
+              savePendingMessages().catch((err) => {
+                logger.error("Error saving pending messages", "Hook", err);
               });
             }
           } catch (error) {
@@ -492,12 +589,23 @@ export function useBle(): UseBleReturn {
             if (transcription) {
               setLastTranscription(transcription);
               logger.debug("Native processing transcription received", "Hook");
-              appendMessage({
-                role: "user",
-                text: transcription,
-                timestamp: Date.now(),
-              }).catch((err) => {
-                logger.error("Failed to save transcription", "Hook", err);
+              
+              // Initialize or update pending messages
+              const sessionId = activeSessionId.current || `native_${Date.now()}`;
+              if (!pendingNativeMessages.current) {
+                pendingNativeMessages.current = {
+                  sessionId,
+                  transcription: null,
+                  response: null,
+                  timestamp: Date.now(),
+                };
+              }
+              
+              pendingNativeMessages.current.transcription = transcription;
+              
+              // Try to save if response is already available
+              savePendingMessages().catch((err) => {
+                logger.error("Error saving pending messages", "Hook", err);
               });
             }
           } catch (error) {
@@ -558,6 +666,19 @@ export function useBle(): UseBleReturn {
     return () => {
       isCleanedUp = true;
       logger.debug("Cleaning up native listeners", "Hook");
+      
+      // Cleanup timeout
+      if (pendingMessagesTimeoutRef.current) {
+        clearTimeout(pendingMessagesTimeoutRef.current);
+        pendingMessagesTimeoutRef.current = null;
+      }
+      
+      // Save any pending messages before cleanup
+      if (pendingNativeMessages.current) {
+        savePendingMessages(true).catch(() => {
+          // Ignore errors during cleanup
+        });
+      }
       
       Promise.all(listenerRemovers.map(l => l.remove())).catch(() => {
         logger.debug("Error removing some listeners (may already be removed)", "Hook");
