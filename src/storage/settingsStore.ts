@@ -238,6 +238,46 @@ export async function createPreset(name: string): Promise<PersonaPreset> {
   return newPreset;
 }
 
+/**
+ * Actualizar configuración del backend en SharedPreferences nativo
+ * Esto asegura que el servicio nativo use los valores correctos de persona, rules y baseRules
+ */
+async function updateNativeBackendConfig(preset: PersonaPreset): Promise<void> {
+  try {
+    // Solo actualizar en plataformas nativas
+    if (typeof window !== "undefined" && (window as any).Capacitor?.isNativePlatform()) {
+      const { getBackendSharedToken } = await import("@/api");
+      const { backgroundService } = await import("@/services/backgroundService");
+      
+      const backendToken = getBackendSharedToken();
+      if (backendToken) {
+        await backgroundService.setBackendConfig({
+          backendToken: backendToken,
+          persona: preset.persona || "",
+          rules: preset.rules || "",
+          baseRules: preset.baseRules || "",
+        });
+        logger.debug(
+          `Native backend config updated for preset: ${preset.name}`,
+          "Settings"
+        );
+      } else {
+        logger.warn(
+          "Backend token not available, skipping native config update",
+          "Settings"
+        );
+      }
+    }
+  } catch (error) {
+    // No fallar si no se puede actualizar el config nativo
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    logger.warn(
+      `Failed to update native backend config (non-critical): ${errorMsg}`,
+      "Settings"
+    );
+  }
+}
+
 export async function updatePreset(
   id: string,
   updates: Partial<Omit<PersonaPreset, "id" | "createdAt">>
@@ -258,10 +298,11 @@ export async function updatePreset(
   await saveSettings(settings);
   logger.debug(`Updated preset: ${settings.personas[index].name}`, "Settings");
   
-  // Si actualizamos el preset activo, invalidar cache
+  // Si actualizamos el preset activo, invalidar cache y actualizar nativo
   if (id === settings.activePersonaId) {
     invalidateApiCache();
-    logger.debug("Active preset updated, cache invalidated", "Settings");
+    await updateNativeBackendConfig(settings.personas[index]);
+    logger.debug("Active preset updated, cache invalidated and native config updated", "Settings");
   }
 }
 
@@ -312,6 +353,9 @@ export async function setActivePreset(id: string): Promise<void> {
   
   // Invalidar cache de API para que use el nuevo preset inmediatamente
   invalidateApiCache();
+  
+  // Actualizar SharedPreferences nativo para que el servicio nativo use el nuevo preset
+  await updateNativeBackendConfig(preset);
   
   logger.debug(`Set active preset: ${preset.name} (cache invalidated)`, "Settings");
 }

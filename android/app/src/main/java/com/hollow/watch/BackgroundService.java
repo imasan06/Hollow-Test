@@ -464,6 +464,62 @@ public class BackgroundService extends Service {
                     return;
                 }
                 
+                // Step 3.5: Get conversation context from SharedPreferences
+                String contextText = null;
+                try {
+                    SharedPreferences prefs = getSharedPreferences("_capacitor_preferences", MODE_PRIVATE);
+                    String conversationHistoryJson = prefs.getString("conversation_history", null);
+                    
+                    if (conversationHistoryJson != null && !conversationHistoryJson.isEmpty()) {
+                        android.util.Log.d("BackgroundService", "Found conversation_history: " + conversationHistoryJson.length() + " chars");
+                        
+                        // Parse JSON array and format as text (matching JavaScript formatConversationContext)
+                        org.json.JSONArray historyArray = new org.json.JSONArray(conversationHistoryJson);
+                        android.util.Log.d("BackgroundService", "Parsed conversation_history: " + historyArray.length() + " messages (fresh parse)");
+                        if (historyArray.length() > 0) {
+                            // Format messages as "USER: text\n\nASSISTANT: text" (matching backend expectation)
+                            java.util.List<String> formattedMessages = new java.util.ArrayList<>();
+                            int maxMessages = Math.min(historyArray.length(), 12); // MAX_CONTEXT_TURNS
+                            int startIndex = Math.max(0, historyArray.length() - maxMessages);
+                            
+                            for (int i = startIndex; i < historyArray.length(); i++) {
+                                org.json.JSONObject msg = historyArray.getJSONObject(i);
+                                String role = msg.optString("role", "");
+                                String text = msg.optString("text", "");
+                                
+                                if (!text.isEmpty() && (role.equals("user") || role.equals("assistant"))) {
+                                    String roleLabel = role.equals("user") ? "USER" : "ASSISTANT";
+                                    formattedMessages.add(roleLabel + ": " + text);
+                                }
+                            }
+                            
+                            if (!formattedMessages.isEmpty()) {
+                                // Build formatted context string (compatible with older Android versions)
+                                StringBuilder contextBuilder = new StringBuilder();
+                                for (int i = 0; i < formattedMessages.size(); i++) {
+                                    if (i > 0) {
+                                        contextBuilder.append("\n\n");
+                                    }
+                                    contextBuilder.append(formattedMessages.get(i));
+                                }
+                                contextText = contextBuilder.toString();
+                                android.util.Log.d("BackgroundService", "Formatted conversation context: " + formattedMessages.size() + " messages (" + contextText.length() + " chars)");
+                                android.util.Log.d("BackgroundService", "Context preview (first 200 chars): " + contextText.substring(0, Math.min(200, contextText.length())));
+                            } else {
+                                android.util.Log.d("BackgroundService", "No valid messages found in conversation_history after filtering");
+                            }
+                        } else {
+                            android.util.Log.d("BackgroundService", "conversation_history array is empty");
+                        }
+                    } else {
+                        android.util.Log.d("BackgroundService", "No conversation_history found in SharedPreferences");
+                    }
+                } catch (org.json.JSONException e) {
+                    android.util.Log.w("BackgroundService", "Invalid conversation_history JSON: " + e.getMessage());
+                } catch (Exception e) {
+                    android.util.Log.e("BackgroundService", "Error formatting context: " + e.getMessage(), e);
+                }
+                
                 // Step 4: Make HTTP request to backend
                 android.util.Log.d("BackgroundService", "Sending request to backend API...");
                 long apiStartTime = System.currentTimeMillis();
@@ -475,7 +531,7 @@ public class BackgroundService extends Service {
                     persona,
                     rules,
                     baseRules,
-                    null // context - can be added later if needed
+                    contextText // Send formatted conversation history as context
                 );
                 
                 long apiTime = System.currentTimeMillis() - apiStartTime;
