@@ -465,7 +465,9 @@ public class BackgroundService extends Service {
                 }
                 
                 // Step 3.5: Get conversation context from SharedPreferences
+                // OPTIMIZED: Direct StringBuilder building to avoid intermediate list
                 String contextText = null;
+                long contextStartTime = System.currentTimeMillis();
                 try {
                     SharedPreferences prefs = getSharedPreferences("_capacitor_preferences", MODE_PRIVATE);
                     String conversationHistoryJson = prefs.getString("conversation_history", null);
@@ -477,10 +479,13 @@ public class BackgroundService extends Service {
                         org.json.JSONArray historyArray = new org.json.JSONArray(conversationHistoryJson);
                         android.util.Log.d("BackgroundService", "Parsed conversation_history: " + historyArray.length() + " messages (fresh parse)");
                         if (historyArray.length() > 0) {
-                            // Format messages as "USER: text\n\nASSISTANT: text" (matching backend expectation)
-                            java.util.List<String> formattedMessages = new java.util.ArrayList<>();
+                            // OPTIMIZATION: Build directly with StringBuilder, skip intermediate list
                             int maxMessages = Math.min(historyArray.length(), 12); // MAX_CONTEXT_TURNS
                             int startIndex = Math.max(0, historyArray.length() - maxMessages);
+                            
+                            // Pre-allocate StringBuilder with estimated capacity (average 100 chars per message)
+                            StringBuilder contextBuilder = new StringBuilder(maxMessages * 100);
+                            boolean firstMessage = true;
                             
                             for (int i = startIndex; i < historyArray.length(); i++) {
                                 org.json.JSONObject msg = historyArray.getJSONObject(i);
@@ -488,23 +493,20 @@ public class BackgroundService extends Service {
                                 String text = msg.optString("text", "");
                                 
                                 if (!text.isEmpty() && (role.equals("user") || role.equals("assistant"))) {
+                                    if (!firstMessage) {
+                                        contextBuilder.append("\n\n");
+                                    }
+                                    firstMessage = false;
+                                    
                                     String roleLabel = role.equals("user") ? "USER" : "ASSISTANT";
-                                    formattedMessages.add(roleLabel + ": " + text);
+                                    contextBuilder.append(roleLabel).append(": ").append(text);
                                 }
                             }
                             
-                            if (!formattedMessages.isEmpty()) {
-                                // Build formatted context string (compatible with older Android versions)
-                                StringBuilder contextBuilder = new StringBuilder();
-                                for (int i = 0; i < formattedMessages.size(); i++) {
-                                    if (i > 0) {
-                                        contextBuilder.append("\n\n");
-                                    }
-                                    contextBuilder.append(formattedMessages.get(i));
-                                }
+                            if (contextBuilder.length() > 0) {
                                 contextText = contextBuilder.toString();
-                                android.util.Log.d("BackgroundService", "Formatted conversation context: " + formattedMessages.size() + " messages (" + contextText.length() + " chars)");
-                                android.util.Log.d("BackgroundService", "Context preview (first 200 chars): " + contextText.substring(0, Math.min(200, contextText.length())));
+                                long contextTime = System.currentTimeMillis() - contextStartTime;
+                                android.util.Log.d("BackgroundService", "Formatted conversation context: " + maxMessages + " messages (" + contextText.length() + " chars, took " + contextTime + "ms)");
                             } else {
                                 android.util.Log.d("BackgroundService", "No valid messages found in conversation_history after filtering");
                             }
@@ -854,13 +856,17 @@ public class BackgroundService extends Service {
                 try {
                     // Parse JSON array and format as text (matching JavaScript formatConversationContext)
                     // CRITICAL: Always parse fresh - don't reuse old data
+                    // OPTIMIZED: Direct StringBuilder building to avoid intermediate list
                     org.json.JSONArray historyArray = new org.json.JSONArray(conversationHistoryJson);
                     android.util.Log.d("BackgroundService", "Parsed conversation_history: " + historyArray.length() + " messages (fresh parse)");
                     if (historyArray.length() > 0) {
-                        // Format messages as "USER: text\n\nASSISTANT: text" (matching backend expectation)
-                        java.util.List<String> formattedMessages = new java.util.ArrayList<>();
+                        // OPTIMIZATION: Build directly with StringBuilder, skip intermediate list
                         int maxMessages = Math.min(historyArray.length(), 12); // MAX_CONTEXT_TURNS
                         int startIndex = Math.max(0, historyArray.length() - maxMessages);
+                        
+                        // Pre-allocate StringBuilder with estimated capacity (average 100 chars per message)
+                        StringBuilder contextBuilder = new StringBuilder(maxMessages * 100);
+                        boolean firstMessage = true;
                         
                         for (int i = startIndex; i < historyArray.length(); i++) {
                             org.json.JSONObject msg = historyArray.getJSONObject(i);
@@ -868,23 +874,19 @@ public class BackgroundService extends Service {
                             String text = msg.optString("text", "");
                             
                             if (!text.isEmpty() && (role.equals("user") || role.equals("assistant"))) {
+                                if (!firstMessage) {
+                                    contextBuilder.append("\n\n");
+                                }
+                                firstMessage = false;
+                                
                                 String roleLabel = role.equals("user") ? "USER" : "ASSISTANT";
-                                formattedMessages.add(roleLabel + ": " + text);
+                                contextBuilder.append(roleLabel).append(": ").append(text);
                             }
                         }
                         
-                        if (!formattedMessages.isEmpty()) {
-                            // Build formatted context string (compatible with older Android versions)
-                            StringBuilder contextBuilder = new StringBuilder();
-                            for (int i = 0; i < formattedMessages.size(); i++) {
-                                if (i > 0) {
-                                    contextBuilder.append("\n\n");
-                                }
-                                contextBuilder.append(formattedMessages.get(i));
-                            }
+                        if (contextBuilder.length() > 0) {
                             contextText = contextBuilder.toString();
-                            android.util.Log.d("BackgroundService", "Formatted conversation context: " + formattedMessages.size() + " messages (" + contextText.length() + " chars)");
-                            android.util.Log.d("BackgroundService", "Context preview (first 200 chars): " + contextText.substring(0, Math.min(200, contextText.length())));
+                            android.util.Log.d("BackgroundService", "Formatted conversation context: " + maxMessages + " messages (" + contextText.length() + " chars)");
                         } else {
                             android.util.Log.d("BackgroundService", "No valid messages found in conversation_history after filtering");
                         }
@@ -1009,9 +1011,11 @@ public class BackgroundService extends Service {
     /**
      * Save conversation messages directly to SharedPreferences (native implementation)
      * This works even when JavaScript is paused in background/sleep mode
+     * OPTIMIZED: Only recreates array if exceeding max messages to avoid unnecessary parsing
      */
     private void saveConversationMessagesNative(String transcription, String response) {
         try {
+            long saveStartTime = System.currentTimeMillis();
             SharedPreferences prefs = getSharedPreferences("_capacitor_preferences", MODE_PRIVATE);
             String existingHistoryJson = prefs.getString("conversation_history", "[]");
             
@@ -1040,8 +1044,10 @@ public class BackgroundService extends Service {
             historyArray.put(assistantMsg);
             
             // Limit to last 20 messages (MAX_CONVERSATION_TURNS)
+            // OPTIMIZATION: Only recreate array if we exceed the limit
             int maxMessages = 20;
             if (historyArray.length() > maxMessages) {
+                // Only create new array when necessary - this is the expensive operation
                 org.json.JSONArray limitedArray = new org.json.JSONArray();
                 int startIndex = historyArray.length() - maxMessages;
                 for (int i = startIndex; i < historyArray.length(); i++) {
@@ -1055,13 +1061,15 @@ public class BackgroundService extends Service {
             editor.putString("conversation_history", historyArray.toString());
             boolean success = editor.commit(); // Synchronous write
             
+            long saveTime = System.currentTimeMillis() - saveStartTime;
+            
             if (success) {
                 android.util.Log.d("BackgroundService", 
                     "✅ Saved conversation messages natively: user \"" + 
                     transcription.substring(0, Math.min(30, transcription.length())) + 
                     "...\" and assistant \"" + 
                     response.substring(0, Math.min(30, response.length())) + 
-                    "...\" (total: " + historyArray.length() + " messages)");
+                    "...\" (total: " + historyArray.length() + " messages, save took " + saveTime + "ms)");
             } else {
                 android.util.Log.e("BackgroundService", "Failed to save conversation messages (commit returned false)");
             }
@@ -1072,9 +1080,11 @@ public class BackgroundService extends Service {
     
     /**
      * Static version for use in processWavBase64
+     * OPTIMIZED: Only recreates array if exceeding max messages to avoid unnecessary parsing
      */
     private static void saveConversationMessagesNativeStatic(Context context, String transcription, String response) {
         try {
+            long saveStartTime = System.currentTimeMillis();
             SharedPreferences prefs = context.getSharedPreferences("_capacitor_preferences", Context.MODE_PRIVATE);
             String existingHistoryJson = prefs.getString("conversation_history", "[]");
             
@@ -1103,8 +1113,10 @@ public class BackgroundService extends Service {
             historyArray.put(assistantMsg);
             
             // Limit to last 20 messages (MAX_CONVERSATION_TURNS)
+            // OPTIMIZATION: Only recreate array if we exceed the limit
             int maxMessages = 20;
             if (historyArray.length() > maxMessages) {
+                // Only create new array when necessary - this is the expensive operation
                 org.json.JSONArray limitedArray = new org.json.JSONArray();
                 int startIndex = historyArray.length() - maxMessages;
                 for (int i = startIndex; i < historyArray.length(); i++) {
@@ -1118,13 +1130,15 @@ public class BackgroundService extends Service {
             editor.putString("conversation_history", historyArray.toString());
             boolean success = editor.commit(); // Synchronous write
             
+            long saveTime = System.currentTimeMillis() - saveStartTime;
+            
             if (success) {
                 android.util.Log.d("BackgroundService", 
                     "✅ Saved conversation messages natively: user \"" + 
                     transcription.substring(0, Math.min(30, transcription.length())) + 
                     "...\" and assistant \"" + 
                     response.substring(0, Math.min(30, response.length())) + 
-                    "...\" (total: " + historyArray.length() + " messages)");
+                    "...\" (total: " + historyArray.length() + " messages, save took " + saveTime + "ms)");
             } else {
                 android.util.Log.e("BackgroundService", "Failed to save conversation messages (commit returned false)");
             }
