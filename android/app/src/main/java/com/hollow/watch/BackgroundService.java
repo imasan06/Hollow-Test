@@ -435,28 +435,68 @@ public class BackgroundService extends Service {
         new Thread(() -> {
             try {
                 android.util.Log.d("BackgroundService", "Starting native audio processing pipeline");
-                long startTime = System.currentTimeMillis();
+                long pipelineStartTime = System.currentTimeMillis();
                 
                 // Step 1: Decode ADPCM to PCM
-                android.util.Log.d("BackgroundService", "Decoding ADPCM to PCM...");
+                long decodeStartTime = System.currentTimeMillis();
+                android.util.Log.d("BackgroundService", "Step 1: Decoding ADPCM to PCM...");
+                android.util.Log.d("BackgroundService", "  Input: " + adpcmData.length + " bytes (ADPCM)");
                 ImaAdpcmDecoder.DecodeResult decodeResult = ImaAdpcmDecoder.decode(adpcmData, null);
                 short[] pcmSamples = decodeResult.samples;
-                android.util.Log.d("BackgroundService", "Decoded to " + pcmSamples.length + " PCM samples");
+                long decodeTime = System.currentTimeMillis() - decodeStartTime;
+                
+                // Calculate audio duration (sample rate is 16000 Hz)
+                double audioDurationSeconds = pcmSamples.length / 16000.0;
+                android.util.Log.d("BackgroundService", "  Decoded: " + pcmSamples.length + " PCM samples (" + String.format("%.2f", audioDurationSeconds) + "s audio, took " + decodeTime + "ms)");
+                
+                // Audio duration and size limits
+                final double MAX_AUDIO_DURATION_SECONDS = 30.0; // 30 seconds max
+                final int MAX_AUDIO_BASE64_SIZE_KB = 500; // ~500 KB base64 max (roughly 30s at 16kHz)
+                
+                if (audioDurationSeconds > MAX_AUDIO_DURATION_SECONDS) {
+                    android.util.Log.w("BackgroundService", "⚠️ Audio duration (" + String.format("%.2f", audioDurationSeconds) + "s) exceeds limit (" + MAX_AUDIO_DURATION_SECONDS + "s). Truncating...");
+                    // Truncate to max duration
+                    int maxSamples = (int)(MAX_AUDIO_DURATION_SECONDS * 16000);
+                    short[] truncatedSamples = new short[maxSamples];
+                    System.arraycopy(pcmSamples, Math.max(0, pcmSamples.length - maxSamples), truncatedSamples, 0, maxSamples);
+                    pcmSamples = truncatedSamples;
+                    audioDurationSeconds = MAX_AUDIO_DURATION_SECONDS;
+                    android.util.Log.d("BackgroundService", "  Truncated to " + pcmSamples.length + " samples (" + String.format("%.2f", audioDurationSeconds) + "s)");
+                }
                 
                 // Step 2: Encode PCM to WAV Base64
-                android.util.Log.d("BackgroundService", "Encoding PCM to WAV Base64...");
+                long encodeStartTime = System.currentTimeMillis();
+                android.util.Log.d("BackgroundService", "Step 2: Encoding PCM to WAV Base64...");
                 String wavBase64 = WavEncoder.encodeToBase64(pcmSamples);
-                android.util.Log.d("BackgroundService", "WAV encoded: " + wavBase64.length() + " chars (base64)");
+                long encodeTime = System.currentTimeMillis() - encodeStartTime;
                 
-                long audioProcessingTime = System.currentTimeMillis() - startTime;
-                android.util.Log.d("BackgroundService", "Audio processing took " + audioProcessingTime + "ms");
+                // Calculate sizes
+                int wavBase64Size = wavBase64.length();
+                int wavBase64SizeKB = wavBase64Size / 1024;
+                int estimatedPayloadSizeKB = (wavBase64Size + 1000) / 1024; // Rough estimate including other fields
+                
+                android.util.Log.d("BackgroundService", "  Encoded: " + wavBase64Size + " chars base64 (" + wavBase64SizeKB + " KB, took " + encodeTime + "ms)");
+                
+                // Check size limit
+                if (wavBase64SizeKB > MAX_AUDIO_BASE64_SIZE_KB) {
+                    android.util.Log.w("BackgroundService", "⚠️ Audio size (" + wavBase64SizeKB + " KB) exceeds limit (" + MAX_AUDIO_BASE64_SIZE_KB + " KB)");
+                }
+                
+                android.util.Log.d("BackgroundService", "  Estimated total payload: ~" + estimatedPayloadSizeKB + " KB");
+                
+                long audioProcessingTime = System.currentTimeMillis() - pipelineStartTime;
+                android.util.Log.d("BackgroundService", "Audio processing pipeline: " + audioProcessingTime + "ms total (decode: " + decodeTime + "ms, encode: " + encodeTime + "ms)");
                 
                 // Step 3: Get configuration from SharedPreferences
+                long configStartTime = System.currentTimeMillis();
+                android.util.Log.d("BackgroundService", "Step 3: Loading configuration from SharedPreferences...");
                 String userId = getUserId();
                 String backendToken = getBackendToken();
                 String persona = getPersona();
                 String rules = getRules();
                 String baseRules = getBaseRules();
+                long configTime = System.currentTimeMillis() - configStartTime;
+                android.util.Log.d("BackgroundService", "  Configuration loaded in " + configTime + "ms");
                 
                 if (backendToken == null || backendToken.isEmpty()) {
                     android.util.Log.e("BackgroundService", "Backend token not found - cannot process audio");
@@ -468,6 +508,7 @@ public class BackgroundService extends Service {
                 // OPTIMIZED: Direct StringBuilder building to avoid intermediate list
                 String contextText = null;
                 long contextStartTime = System.currentTimeMillis();
+                long contextTime = 0;
                 try {
                     SharedPreferences prefs = getSharedPreferences("_capacitor_preferences", MODE_PRIVATE);
                     String conversationHistoryJson = prefs.getString("conversation_history", null);
@@ -505,8 +546,8 @@ public class BackgroundService extends Service {
                             
                             if (contextBuilder.length() > 0) {
                                 contextText = contextBuilder.toString();
-                                long contextTime = System.currentTimeMillis() - contextStartTime;
-                                android.util.Log.d("BackgroundService", "Formatted conversation context: " + maxMessages + " messages (" + contextText.length() + " chars, took " + contextTime + "ms)");
+                                contextTime = System.currentTimeMillis() - contextStartTime;
+                                android.util.Log.d("BackgroundService", "Step 3.5: Formatted conversation context: " + maxMessages + " messages (" + contextText.length() + " chars, took " + contextTime + "ms)");
                             } else {
                                 android.util.Log.d("BackgroundService", "No valid messages found in conversation_history after filtering");
                             }
@@ -523,10 +564,48 @@ public class BackgroundService extends Service {
                 }
                 
                 // Step 4: Make HTTP request to backend
-                android.util.Log.d("BackgroundService", "Sending request to backend API...");
+                android.util.Log.d("BackgroundService", "Step 4: Sending request to backend API...");
+                android.util.Log.d("BackgroundService", "  Audio size: " + (wavBase64.length() / 1024) + " KB base64");
+                android.util.Log.d("BackgroundService", "  Context size: " + (contextText != null ? contextText.length() : 0) + " chars");
+                android.util.Log.d("BackgroundService", "  Estimated payload: ~" + ((wavBase64.length() + (contextText != null ? contextText.length() : 0) + 1000) / 1024) + " KB");
+                
                 long apiStartTime = System.currentTimeMillis();
+                long networkStartTime = apiStartTime;
                 
                 ApiClient apiClient = new ApiClient(backendToken);
+                
+                // TODO: When backend supports separate transcription endpoint, uncomment this:
+                // This separates audio upload from LLM processing for better performance
+                /*
+                android.util.Log.d("BackgroundService", "  Using separate transcription + chat flow");
+                long transcribeStartTime = System.currentTimeMillis();
+                String transcription = apiClient.sendTranscriptionOnly(wavBase64, userId);
+                long transcribeTime = System.currentTimeMillis() - transcribeStartTime;
+                
+                if (transcription == null || transcription.isEmpty()) {
+                    android.util.Log.e("BackgroundService", "Transcription failed");
+                    isProcessingAudio.set(false);
+                    return;
+                }
+                
+                android.util.Log.d("BackgroundService", "  Transcription received in " + transcribeTime + "ms: \"" + transcription + "\"");
+                
+                long chatStartTime = System.currentTimeMillis();
+                ApiClient.ChatResponse response = apiClient.sendTextChatRequest(
+                    transcription,
+                    userId,
+                    persona,
+                    rules,
+                    baseRules,
+                    contextText
+                );
+                long chatTime = System.currentTimeMillis() - chatStartTime;
+                long apiTime = System.currentTimeMillis() - apiStartTime;
+                android.util.Log.d("BackgroundService", "  Chat request completed in " + chatTime + "ms");
+                android.util.Log.d("BackgroundService", "  Total API time: " + apiTime + "ms (transcribe: " + transcribeTime + "ms, chat: " + chatTime + "ms)");
+                */
+                
+                // Current implementation: combined audio + chat request
                 ApiClient.ChatResponse response = apiClient.sendAudioRequest(
                     wavBase64,
                     userId,
@@ -537,7 +616,8 @@ public class BackgroundService extends Service {
                 );
                 
                 long apiTime = System.currentTimeMillis() - apiStartTime;
-                android.util.Log.d("BackgroundService", "API request took " + apiTime + "ms");
+                android.util.Log.d("BackgroundService", "  API request completed in " + apiTime + "ms");
+                android.util.Log.d("BackgroundService", "  Response received: " + (response.text != null ? response.text.length() : 0) + " chars");
                 
                 // Step 5: Send response to watch via BLE
                 if (response.error != null && !response.error.isEmpty()) {
@@ -567,8 +647,20 @@ public class BackgroundService extends Service {
                     android.util.Log.w("BackgroundService", "BLE not connected, cannot send response");
                 }
                 
-                long totalTime = System.currentTimeMillis() - startTime;
-                android.util.Log.d("BackgroundService", "Complete native processing took " + totalTime + "ms");
+                long totalTime = System.currentTimeMillis() - pipelineStartTime;
+                android.util.Log.d("BackgroundService", "═══════════════════════════════════════════════════");
+                android.util.Log.d("BackgroundService", "📊 PROCESSING TIMING BREAKDOWN:");
+                android.util.Log.d("BackgroundService", "  Audio decode: " + decodeTime + "ms");
+                android.util.Log.d("BackgroundService", "  Audio encode: " + encodeTime + "ms");
+                android.util.Log.d("BackgroundService", "  Config load: " + configTime + "ms");
+                android.util.Log.d("BackgroundService", "  Context format: " + (contextTime > 0 ? contextTime + "ms" : "N/A"));
+                android.util.Log.d("BackgroundService", "  API request: " + apiTime + "ms");
+                android.util.Log.d("BackgroundService", "  Message save: (see below)");
+                android.util.Log.d("BackgroundService", "  ───────────────────────────────────────────────");
+                android.util.Log.d("BackgroundService", "  TOTAL: " + totalTime + "ms");
+                android.util.Log.d("BackgroundService", "  Audio duration: " + String.format("%.2f", audioDurationSeconds) + "s");
+                android.util.Log.d("BackgroundService", "  Payload size: ~" + estimatedPayloadSizeKB + " KB");
+                android.util.Log.d("BackgroundService", "═══════════════════════════════════════════════════");
                 
                 // Step 6: Save messages directly to SharedPreferences (works even when JavaScript is paused)
                 if (response.transcription != null && !response.transcription.isEmpty() && 

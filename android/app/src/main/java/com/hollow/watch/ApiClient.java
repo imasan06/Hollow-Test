@@ -52,7 +52,158 @@ public class ApiClient {
     }
     
     /**
-     * Send audio transcription and chat request
+     * Send transcription-only request (separate from LLM)
+     * This allows separating audio upload from LLM processing for better performance
+     * @param audioBase64 Base64 encoded WAV audio
+     * @param userId User ID
+     * @return Transcription response with transcription text, or null if error
+     */
+    public String sendTranscriptionOnly(String audioBase64, String userId) {
+        try {
+            JSONObject payload = new JSONObject();
+            payload.put("user_id", userId);
+            payload.put("audio", audioBase64);
+            
+            String url = apiEndpoint + "/v1/transcribe"; // Assuming separate endpoint exists
+            RequestBody body = RequestBody.create(
+                payload.toString(),
+                MediaType.parse("application/json")
+            );
+            
+            Request request = new Request.Builder()
+                .url(url)
+                .post(body)
+                .addHeader("Content-Type", "application/json")
+                .addHeader("X-User-Token", backendToken)
+                .build();
+            
+            Log.d(TAG, "Sending transcription-only request to: " + url);
+            long startTime = System.currentTimeMillis();
+            try (Response response = httpClient.newCall(request).execute()) {
+                long duration = System.currentTimeMillis() - startTime;
+                
+                if (!response.isSuccessful()) {
+                    Log.e(TAG, "Transcription request failed: " + response.code());
+                    return null;
+                }
+                
+                String responseBody = response.body() != null ? response.body().string() : "{}";
+                Log.d(TAG, "Transcription received in " + duration + "ms");
+                
+                JSONObject json = new JSONObject(responseBody);
+                String transcription = json.optString("transcription", null);
+                if (transcription == null || transcription.isEmpty()) {
+                    transcription = json.optString("transcript", null);
+                }
+                
+                return transcription;
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Error in transcription-only request: " + e.getMessage(), e);
+            return null;
+        }
+    }
+    
+    /**
+     * Send text-only chat request (after transcription)
+     * This allows separating transcription from LLM processing
+     * @param transcription Transcribed text
+     * @param userId User ID
+     * @param persona Persona string
+     * @param rules Rules string
+     * @param baseRules Base rules string
+     * @param context Optional conversation context
+     * @return ChatResponse with text and error
+     */
+    public ChatResponse sendTextChatRequest(
+        String transcription,
+        String userId,
+        String persona,
+        String rules,
+        String baseRules,
+        String context
+    ) {
+        try {
+            JSONObject payload = new JSONObject();
+            payload.put("user_id", userId);
+            payload.put("transcript", transcription); // Use transcript field for text-only
+            
+            if (persona != null && !persona.isEmpty()) {
+                payload.put("persona", persona);
+            }
+            if (rules != null && !rules.isEmpty()) {
+                payload.put("rules", rules);
+            }
+            if (baseRules != null && !baseRules.isEmpty()) {
+                payload.put("baserules", baseRules);
+            }
+            if (context != null && !context.isEmpty()) {
+                try {
+                    org.json.JSONArray contextArray = new org.json.JSONArray(context);
+                    payload.put("context", contextArray);
+                    Log.d(TAG, "Context sent as JSON array with " + contextArray.length() + " messages");
+                } catch (org.json.JSONException e) {
+                    payload.put("context", context);
+                    Log.d(TAG, "Context sent as plain text (" + context.length() + " chars)");
+                }
+            }
+            
+            String url = apiEndpoint + "/v1/chat";
+            RequestBody body = RequestBody.create(
+                payload.toString(),
+                MediaType.parse("application/json")
+            );
+            
+            Request request = new Request.Builder()
+                .url(url)
+                .post(body)
+                .addHeader("Content-Type", "application/json")
+                .addHeader("X-User-Token", backendToken)
+                .build();
+            
+            Log.d(TAG, "Sending text-only chat request to: " + url);
+            int payloadSize = payload.toString().length();
+            int contextSize = context != null ? context.length() : 0;
+            Log.d(TAG, "Text chat payload: " + payloadSize + " chars (" + (payloadSize / 1024) + " KB)");
+            Log.d(TAG, "  Transcription: " + transcription.length() + " chars");
+            Log.d(TAG, "  Context: " + contextSize + " chars (" + (contextSize / 1024) + " KB)");
+            
+            long startTime = System.currentTimeMillis();
+            try (Response response = httpClient.newCall(request).execute()) {
+                long duration = System.currentTimeMillis() - startTime;
+                
+                if (!response.isSuccessful()) {
+                    String errorBody = response.body() != null ? response.body().string() : "Unknown error";
+                    Log.e(TAG, "Text chat request failed: " + response.code() + " - " + errorBody);
+                    return new ChatResponse(null, null, "HTTP " + response.code() + ": " + errorBody);
+                }
+                
+                String responseBody = response.body() != null ? response.body().string() : "{}";
+                Log.d(TAG, "Text chat response received in " + duration + "ms");
+                
+                JSONObject json = new JSONObject(responseBody);
+                String text = json.optString("reply", null);
+                if (text == null || text.isEmpty()) {
+                    text = json.optString("answer", null);
+                }
+                if (text == null || text.isEmpty()) {
+                    text = json.optString("text", null);
+                }
+                if (text == null || text.isEmpty()) {
+                    text = json.optString("response", null);
+                }
+                
+                String error = json.optString("error", null);
+                return new ChatResponse(text, transcription, error); // Include transcription in response
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Error in text chat request: " + e.getMessage(), e);
+            return new ChatResponse(null, null, "Error: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * Send audio transcription and chat request (combined - current implementation)
      * @param audioBase64 Base64 encoded WAV audio
      * @param userId User ID
      * @param persona Persona string
@@ -117,22 +268,38 @@ public class ApiClient {
             Log.d(TAG, "Sending audio request to: " + url);
             int payloadSize = payload.toString().length();
             int audioSize = audioBase64 != null ? audioBase64.length() : 0;
-            Log.d(TAG, "Request payload size: " + payloadSize + " chars (audio: " + audioSize + " chars)");
+            int contextSize = context != null ? context.length() : 0;
+            Log.d(TAG, "Request payload breakdown:");
+            Log.d(TAG, "  Total payload: " + payloadSize + " chars (" + (payloadSize / 1024) + " KB)");
+            Log.d(TAG, "  Audio (base64): " + audioSize + " chars (" + (audioSize / 1024) + " KB)");
+            Log.d(TAG, "  Context: " + contextSize + " chars (" + (contextSize / 1024) + " KB)");
+            Log.d(TAG, "  Other fields: ~" + ((payloadSize - audioSize - contextSize) / 1024) + " KB");
             
             // Execute immediately - no retries, no delays
             Log.d(TAG, "Attempting connection...");
-            long startTime = System.currentTimeMillis();
+            long connectionStartTime = System.currentTimeMillis();
+            long requestStartTime = connectionStartTime;
             try (Response response = httpClient.newCall(request).execute()) {
-                long duration = System.currentTimeMillis() - startTime;
+                long connectionTime = System.currentTimeMillis() - connectionStartTime;
+                Log.d(TAG, "  Connection established in " + connectionTime + "ms");
                 
+                long responseStartTime = System.currentTimeMillis();
                 if (!response.isSuccessful()) {
                     String errorBody = response.body() != null ? response.body().string() : "Unknown error";
-                    Log.e(TAG, "API request failed: " + response.code() + " - " + errorBody);
+                    long totalTime = System.currentTimeMillis() - requestStartTime;
+                    Log.e(TAG, "API request failed: " + response.code() + " - " + errorBody + " (total: " + totalTime + "ms)");
                     return new ChatResponse(null, null, "HTTP " + response.code() + ": " + errorBody);
                 }
                 
                 String responseBody = response.body() != null ? response.body().string() : "{}";
-                Log.d(TAG, "API response received in " + duration + "ms");
+                long responseTime = System.currentTimeMillis() - responseStartTime;
+                long totalTime = System.currentTimeMillis() - requestStartTime;
+                
+                Log.d(TAG, "API request timing:");
+                Log.d(TAG, "  Connection: " + connectionTime + "ms");
+                Log.d(TAG, "  Response read: " + responseTime + "ms");
+                Log.d(TAG, "  Total: " + totalTime + "ms");
+                Log.d(TAG, "  Response size: " + responseBody.length() + " chars (" + (responseBody.length() / 1024) + " KB)");
                 
                 JSONObject json = new JSONObject(responseBody);
                 
