@@ -521,7 +521,7 @@ public class BackgroundService extends Service {
                         android.util.Log.d("BackgroundService", "Parsed conversation_history: " + historyArray.length() + " messages (fresh parse)");
                         if (historyArray.length() > 0) {
                             // OPTIMIZATION: Build directly with StringBuilder, skip intermediate list
-                            int maxMessages = Math.min(historyArray.length(), 12); // MAX_CONTEXT_TURNS
+                            int maxMessages = Math.min(historyArray.length(), 10); // MAX_CONTEXT_TURNS (matches TypeScript)
                             int startIndex = Math.max(0, historyArray.length() - maxMessages);
                             
                             // Pre-allocate StringBuilder with estimated capacity (average 100 chars per message)
@@ -953,7 +953,7 @@ public class BackgroundService extends Service {
                     android.util.Log.d("BackgroundService", "Parsed conversation_history: " + historyArray.length() + " messages (fresh parse)");
                     if (historyArray.length() > 0) {
                         // OPTIMIZATION: Build directly with StringBuilder, skip intermediate list
-                        int maxMessages = Math.min(historyArray.length(), 12); // MAX_CONTEXT_TURNS
+                        int maxMessages = Math.min(historyArray.length(), 10); // MAX_CONTEXT_TURNS (matches TypeScript)
                         int startIndex = Math.max(0, historyArray.length() - maxMessages);
                         
                         // Pre-allocate StringBuilder with estimated capacity (average 100 chars per message)

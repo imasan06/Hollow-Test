@@ -46,15 +46,32 @@ public class BleConnectionManager {
     
     private BleEventListener eventListener;
     private ConcurrentLinkedQueue<byte[]> audioBuffer = new ConcurrentLinkedQueue<>();
+    private Handler connectionCheckHandler;
+    private Runnable connectionCheckRunnable;
+    private static final long CONNECTION_CHECK_INTERVAL_MS = 30000; // Check every 30 seconds
+    private long lastDataReceivedTime = 0;
+    private static final long DATA_TIMEOUT_MS = 120000; // 2 minutes without data = potential issue
     
     public BleConnectionManager(Context context) {
         this.context = context;
         this.mainHandler = new Handler(Looper.getMainLooper());
+        this.connectionCheckHandler = new Handler(Looper.getMainLooper());
         
         BluetoothManager bluetoothManager = (BluetoothManager) context.getSystemService(Context.BLUETOOTH_SERVICE);
         if (bluetoothManager != null) {
             this.bluetoothAdapter = bluetoothManager.getAdapter();
         }
+        
+        // Setup periodic connection health check
+        this.connectionCheckRunnable = new Runnable() {
+            @Override
+            public void run() {
+                checkConnectionHealth();
+                if (isConnected) {
+                    connectionCheckHandler.postDelayed(this, CONNECTION_CHECK_INTERVAL_MS);
+                }
+            }
+        };
         
         Log.d(TAG, "BleConnectionManager initialized");
     }
@@ -109,6 +126,11 @@ public class BleConnectionManager {
         isConnecting = false;
         isConnected = false;
         
+        // Stop connection health check
+        if (connectionCheckHandler != null) {
+            connectionCheckHandler.removeCallbacks(connectionCheckRunnable);
+        }
+        
         if (bluetoothGatt != null) {
             try {
                 bluetoothGatt.disconnect();
@@ -120,6 +142,7 @@ public class BleConnectionManager {
         }
         
         connectedDevice = null;
+        lastDataReceivedTime = 0;
         audioBuffer.clear();
         
         if (eventListener != null) {
@@ -169,7 +192,105 @@ public class BleConnectionManager {
     }
     
     public boolean isConnected() {
-        return isConnected && bluetoothGatt != null;
+        // Verify actual GATT connection state, not just the flag
+        boolean actuallyConnected = isConnected && bluetoothGatt != null;
+        
+        // Double-check with BluetoothManager if available
+        if (actuallyConnected && bluetoothAdapter != null) {
+            try {
+                BluetoothManager bluetoothManager = (BluetoothManager) context.getSystemService(Context.BLUETOOTH_SERVICE);
+                if (bluetoothManager != null && connectedDevice != null) {
+                    int connectionState = bluetoothManager.getConnectionState(connectedDevice, BluetoothProfile.GATT);
+                    actuallyConnected = (connectionState == BluetoothProfile.STATE_CONNECTED);
+                    
+                    if (!actuallyConnected && isConnected) {
+                        Log.w(TAG, "⚠️ Connection state mismatch: flag says connected but GATT state is " + connectionState);
+                        // Update our flag to match reality
+                        isConnected = false;
+                    }
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "Error checking connection state: " + e.getMessage());
+            }
+        }
+        
+        return actuallyConnected;
+    }
+    
+    /**
+     * Check connection health and re-enable notifications if needed
+     */
+    private void checkConnectionHealth() {
+        if (!isConnected || bluetoothGatt == null) {
+            return;
+        }
+        
+        try {
+            // Check if we've received data recently
+            long timeSinceLastData = System.currentTimeMillis() - lastDataReceivedTime;
+            boolean dataTimeout = (lastDataReceivedTime > 0 && timeSinceLastData > DATA_TIMEOUT_MS);
+            
+            // Verify actual connection state
+            boolean actuallyConnected = isConnected();
+            
+            if (!actuallyConnected) {
+                Log.w(TAG, "⚠️ Connection health check: GATT reports disconnected, updating state");
+                isConnected = false;
+                if (eventListener != null) {
+                    eventListener.onConnectionStateChanged(false);
+                }
+                return;
+            }
+            
+            if (dataTimeout) {
+                Log.w(TAG, "⚠️ No data received for " + (timeSinceLastData / 1000) + "s - re-enabling notifications");
+                reEnableNotifications();
+            } else {
+                Log.d(TAG, "Connection health check OK (last data: " + (timeSinceLastData / 1000) + "s ago)");
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Error in connection health check: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Re-enable notifications for audio characteristic
+     * This fixes cases where notifications are silently lost
+     */
+    private void reEnableNotifications() {
+        if (!isConnected || bluetoothGatt == null) {
+            Log.w(TAG, "Cannot re-enable notifications - not connected");
+            return;
+        }
+        
+        try {
+            BluetoothGattService service = bluetoothGatt.getService(SERVICE_UUID);
+            if (service == null) {
+                Log.e(TAG, "Service not found when re-enabling notifications");
+                return;
+            }
+            
+            BluetoothGattCharacteristic audioChar = service.getCharacteristic(AUDIO_CHAR_UUID);
+            if (audioChar == null) {
+                Log.e(TAG, "Audio characteristic not found when re-enabling notifications");
+                return;
+            }
+            
+            // Re-enable notifications
+            bluetoothGatt.setCharacteristicNotification(audioChar, true);
+            
+            BluetoothGattDescriptor descriptor = audioChar.getDescriptor(CLIENT_CHARACTERISTIC_CONFIG);
+            if (descriptor != null) {
+                descriptor.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);
+                bluetoothGatt.writeDescriptor(descriptor);
+                Log.d(TAG, "✅ Notifications re-enabled for audio characteristic");
+                lastDataReceivedTime = System.currentTimeMillis(); // Reset timeout
+            } else {
+                Log.e(TAG, "Descriptor not found when re-enabling notifications");
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Error re-enabling notifications: " + e.getMessage(), e);
+        }
     }
     
     private final BluetoothGattCallback gattCallback = new BluetoothGattCallback() {
@@ -189,6 +310,11 @@ public class BleConnectionManager {
                 if (eventListener != null) {
                     eventListener.onConnectionStateChanged(true);
                 }
+                
+                // Start periodic connection health check
+                lastDataReceivedTime = System.currentTimeMillis();
+                connectionCheckHandler.postDelayed(connectionCheckRunnable, CONNECTION_CHECK_INTERVAL_MS);
+                Log.d(TAG, "Started connection health check");
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 Log.d(TAG, "Disconnected from GATT server");
                 isConnecting = false;
@@ -197,6 +323,9 @@ public class BleConnectionManager {
                 if (eventListener != null) {
                     eventListener.onConnectionStateChanged(false);
                 }
+                
+                // Stop connection health check
+                connectionCheckHandler.removeCallbacks(connectionCheckRunnable);
                 
                 // Intentar reconectar si fue una desconexión inesperada
                 if (connectedDevice != null && status != 0) {
@@ -246,6 +375,7 @@ public class BleConnectionManager {
             if (charUuid.equals(AUDIO_CHAR_UUID)) {
                 byte[] data = characteristic.getValue();
                 if (data != null && data.length > 0) {
+                    lastDataReceivedTime = System.currentTimeMillis(); // Update last data time
                     Log.d(TAG, "Audio data received: " + data.length + " bytes");
                     
                     // Agregar a buffer
