@@ -24,8 +24,6 @@ interface BackgroundServicePlugin {
     listenerFunc: (data: BleEventData) => void
   ): Promise<{ remove: () => Promise<void> }>;
   removeAllListeners(): Promise<void>;
-  /** Test method to simulate BLE audio flow without a real device */
-  testAudioFlow(): Promise<{ success: boolean; audioSize: number; base64Size: number }>;
   /** Set backend configuration (token, persona, rules, baseRules) for native processing */
   setBackendConfig(options: {
     backendToken?: string;
@@ -398,41 +396,6 @@ class BackgroundService {
   }
 
   /**
-   * Test method to simulate BLE audio flow without a real device.
-   * Useful for testing the BackgroundService → Plugin → JavaScript flow.
-   */
-  async testAudioFlow(): Promise<{ success: boolean; audioSize?: number; base64Size?: number }> {
-    if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android") {
-      try {
-        if (
-          BackgroundServiceNative &&
-          typeof BackgroundServiceNative.testAudioFlow === "function"
-        ) {
-          logger.info("Testing BackgroundService audio flow...", "BackgroundService");
-          const result = await BackgroundServiceNative.testAudioFlow();
-          logger.info(
-            `Test audio sent: ${result.audioSize} bytes (${result.base64Size} base64 chars)`,
-            "BackgroundService"
-          );
-          return result;
-        } else {
-          logger.warn("testAudioFlow not available", "BackgroundService");
-          return { success: false };
-        }
-      } catch (error) {
-        logger.error(
-          "Failed to test audio flow",
-          "BackgroundService",
-          error instanceof Error ? error : new Error(String(error))
-        );
-        return { success: false };
-      }
-    }
-    logger.warn("testAudioFlow only available on Android", "BackgroundService");
-    return { success: false };
-  }
-
-  /**
    * Set backend configuration for native audio processing
    * This must be called before native processing can work
    */
@@ -505,8 +468,3 @@ class BackgroundService {
 }
 
 export const backgroundService = new BackgroundService();
-
-// Expose test function globally for debugging (accessible from browser console)
-if (typeof window !== "undefined") {
-  (window as any).testBackgroundAudio = () => backgroundService.testAudioFlow();
-}

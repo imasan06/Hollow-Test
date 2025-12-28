@@ -346,38 +346,6 @@ public class BackgroundServicePlugin extends Plugin {
     }
     
     @PluginMethod
-    public void testAudioFlow(PluginCall call) {
-        Log.d(TAG, "testAudioFlow() called - simulating BLE audio with native processing");
-        try {
-            // Generate fake ADPCM audio data (silence/low noise)
-            // Real ADPCM is 4 bits per sample, so 128 bytes = 256 samples
-            // We'll create ~1 second of fake audio (multiple chunks)
-            int chunksToSend = 50; // ~50 chunks like real audio
-            int chunkSize = 128;
-            
-            // Combine all chunks into one buffer (simulating what BackgroundService does)
-            byte[] fakeAudio = new byte[chunksToSend * chunkSize];
-            for (int i = 0; i < fakeAudio.length; i++) {
-                // Generate low-amplitude noise (ADPCM encoded silence-ish)
-                fakeAudio[i] = (byte) ((i % 16) << 4 | ((i + 8) % 16));
-            }
-            
-            Log.d(TAG, "Generated fake audio: " + fakeAudio.length + " bytes");
-            
-            // Process natively (same as real BLE audio)
-            processAudioNative(fakeAudio);
-            
-            JSObject result = new JSObject();
-            result.put("success", true);
-            result.put("audioSize", fakeAudio.length);
-            call.resolve(result);
-        } catch (Exception e) {
-            Log.e(TAG, "Exception in testAudioFlow: " + e.getMessage(), e);
-            call.reject("Failed to test audio flow: " + e.getMessage(), e);
-        }
-    }
-    
-    @PluginMethod
     public void processAudioNative(PluginCall call) {
         Log.d(TAG, "processAudioNative() called");
         try {

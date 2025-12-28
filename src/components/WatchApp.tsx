@@ -1,11 +1,9 @@
 import { useEffect, useState, useRef, useCallback, lazy, Suspense } from 'react';
 import { useBle } from '@/hooks/useBle';
-import { useAudioRecorder } from '@/hooks/useAudioRecorder';
 import { Button } from '@/components/ui/button';
 import { StatusIndicator } from '@/components/ui/StatusIndicator';
 import { VoiceVisualizer } from '@/components/ui/VoiceVisualizer';
 import { ResponseCard } from '@/components/ui/ResponseCard';
-import { Mic, Square } from 'lucide-react';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -16,15 +14,12 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { Bluetooth, BluetoothOff, Watch, Wifi, Settings, Trash2, FlaskConical } from 'lucide-react';
+import { Bluetooth, BluetoothOff, Watch, Wifi, Settings, Trash2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { Badge } from '@/components/ui/badge';
 import { APP_CONFIG } from '@/config/app.config';
 import { getConversationHistory, ConversationMessage } from '@/storage/conversationStore';
 import { logger } from '@/utils/logger';
-import { backgroundService } from '@/services/backgroundService';
-import { Capacitor } from '@capacitor/core';
-import { toast } from '@/hooks/use-toast';
 
 
 const ConversationHistory = lazy(() => import('@/components/ui/ConversationHistory').then(m => ({ default: m.ConversationHistory })));
@@ -44,76 +39,11 @@ export function WatchApp() {
     deviceName,
   } = useBle();
   
-  
-  const {
-    isRecording: isRecordingAudio,
-    duration: recordingDuration,
-    isProcessing: isProcessingAudio,
-    lastTranscription: recordingTranscription,
-    lastResponse: recordingResponse,
-    error: recordingError,
-    startRecording,
-    stopRecording,
-    processRecordedAudio,
-  } = useAudioRecorder();
-  
   const [conversationHistory, setConversationHistory] = useState<ConversationMessage[]>([]);
   const [isClearAllDialogOpen, setIsClearAllDialogOpen] = useState(false);
-  const [isTestingAudio, setIsTestingAudio] = useState(false);
-  const wasRecordingRef = useRef(false);
-  
-  // Test BackgroundService audio flow
-  const handleTestBackgroundAudio = async () => {
-    if (!Capacitor.isNativePlatform() || Capacitor.getPlatform() !== 'android') {
-      toast({
-        title: "Not Available",
-        description: "This test only works on Android",
-        variant: "destructive",
-      });
-      return;
-    }
-    
-    setIsTestingAudio(true);
-    try {
-      logger.info("Starting BackgroundService audio test...", "WatchApp");
-      const result = await backgroundService.testAudioFlow();
-      
-      if (result.success) {
-        toast({
-          title: "Test Sent!",
-          description: `Sent ${result.audioSize} bytes of fake audio. Check logs for the flow.`,
-        });
-        logger.info(`Test audio sent successfully: ${result.audioSize} bytes`, "WatchApp");
-      } else {
-        toast({
-          title: "Test Failed",
-          description: "Could not send test audio. Check logs.",
-          variant: "destructive",
-        });
-      }
-    } catch (error) {
-      logger.error("Test audio flow failed", "WatchApp", error instanceof Error ? error : new Error(String(error)));
-      toast({
-        title: "Test Error",
-        description: error instanceof Error ? error.message : "Unknown error",
-        variant: "destructive",
-      });
-    } finally {
-      setIsTestingAudio(false);
-    }
-  };
   
   const isConnected = connectionState === 'connected';
   const isScanning = connectionState === 'scanning' || connectionState === 'connecting';
-  
-
-  useEffect(() => {
-    if (wasRecordingRef.current && !isRecordingAudio && !isProcessingAudio) {
-     
-      processRecordedAudio();
-    }
-    wasRecordingRef.current = isRecordingAudio;
-  }, [isRecordingAudio, isProcessingAudio, processRecordedAudio]);
 
  
   const loadHistoryRef = useRef<Promise<void> | null>(null);
@@ -165,7 +95,7 @@ export function WatchApp() {
   useEffect(() => {
     // Load immediately - no delay
     loadHistory(false);
-  }, [lastResponse, lastTranscription, recordingResponse, recordingTranscription, loadHistory]);
+  }, [lastResponse, lastTranscription, loadHistory]);
 
   
   const mainScrollRef = useRef<HTMLDivElement>(null);
@@ -174,7 +104,7 @@ export function WatchApp() {
 
  
   useEffect(() => {
-    if (mainScrollRef.current && (conversationHistory.length > 0 || lastResponse || lastTranscription || recordingResponse || recordingTranscription)) {
+    if (mainScrollRef.current && (conversationHistory.length > 0 || lastResponse || lastTranscription)) {
       // Scroll immediately - no delay
       if (mainScrollRef.current && !isUserScrollingRef.current) {
         const container = mainScrollRef.current;
@@ -191,7 +121,7 @@ export function WatchApp() {
           });
         }
     }
-  }, [conversationHistory, lastResponse, lastTranscription, recordingResponse, recordingTranscription]);
+  }, [conversationHistory, lastResponse, lastTranscription]);
 
   
   const handleScroll = () => {
@@ -278,22 +208,22 @@ export function WatchApp() {
           <div className="flex flex-col items-center gap-6 w-full">
             {/* Voice Visualizer */}
             <VoiceVisualizer
-              state={isRecordingAudio ? 'listening' : isProcessingAudio ? 'processing' : voiceState}
-              duration={isRecordingAudio ? recordingDuration : audioDuration}
+              state={voiceState}
+              duration={audioDuration}
             />
 
             {/* Transcription & Response Display */}
-            {(recordingTranscription || lastTranscription) && (
+            {lastTranscription && (
               <div className="w-full max-w-md px-4">
                 <p className="text-xs text-muted-foreground mb-1">You said:</p>
                 <p className="text-sm text-foreground bg-muted/50 rounded-lg p-3 italic">
-                  "{recordingTranscription || lastTranscription}"
+                  "{lastTranscription}"
                 </p>
               </div>
             )}
             <ResponseCard
-              response={recordingResponse || lastResponse}
-              error={recordingError || lastError}
+              response={lastResponse}
+              error={lastError}
             />
 
             {/* Connection Controls */}
@@ -326,55 +256,6 @@ export function WatchApp() {
                 >
                   <BluetoothOff className="h-5 w-5" />
                   Disconnect
-                </Button>
-              )}
-
-              {/* Voice Recorder Button for Testing */}
-              <Button
-                size="lg"
-                variant={isRecordingAudio ? "destructive" : "outline"}
-                onClick={isRecordingAudio ? stopRecording : startRecording}
-                disabled={isProcessingAudio}
-                className="min-w-[200px] gap-2"
-              >
-                {isProcessingAudio ? (
-                  <>
-                    <Square className="h-5 w-5 animate-pulse" />
-                    Processing...
-                  </>
-                ) : isRecordingAudio ? (
-                  <>
-                    <Square className="h-5 w-5" />
-                    Stop Recording ({recordingDuration.toFixed(1)}s)
-                  </>
-                ) : (
-                  <>
-                    <Mic className="h-5 w-5" />
-                    Test Voice Recording
-                  </>
-                )}
-              </Button>
-
-              {/* Test BackgroundService Flow Button (Android only) */}
-              {Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android' && (
-                <Button
-                  size="lg"
-                  variant="outline"
-                  onClick={handleTestBackgroundAudio}
-                  disabled={isTestingAudio}
-                  className="min-w-[200px] gap-2 border-dashed border-amber-500/50 text-amber-600 hover:bg-amber-500/10"
-                >
-                  {isTestingAudio ? (
-                    <>
-                      <FlaskConical className="h-5 w-5 animate-pulse" />
-                      Sending test...
-                    </>
-                  ) : (
-                    <>
-                      <FlaskConical className="h-5 w-5" />
-                      Test Background Flow
-                    </>
-                  )}
                 </Button>
               )}
 
