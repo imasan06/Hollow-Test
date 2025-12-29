@@ -51,10 +51,12 @@ public class BackgroundService extends Service {
     private String currentMode = "VOICE"; // "VOICE" or "SILENT"
     
     // HTTP connection pre-warming to reduce first request latency after inactivity
-    private ApiClient sharedApiClient;
+    // Static so it can be accessed from static methods and shared across service instances
+    private static volatile ApiClient sharedApiClient;
     private Handler prewarmHandler;
     private Runnable prewarmRunnable;
     private static final long PREWARM_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+    private volatile boolean isServiceActive = true; // Flag to prevent access after service destruction
 
     @Override
     public void onCreate() {
@@ -238,6 +240,9 @@ public class BackgroundService extends Service {
         android.util.Log.d("BackgroundService", "onDestroy() called");
         logToFile("=== SERVICE DESTROYED ===");
         
+        // Mark service as inactive FIRST to prevent any background threads from accessing resources
+        isServiceActive = false;
+        
         // Stop connection pre-warming
         stopConnectionPrewarming();
         
@@ -386,6 +391,11 @@ public class BackgroundService extends Service {
      * el servicio corre en un proceso separado (:background)
      */
     private void notifyJavaScript(String eventName, Object data) {
+        // Don't notify if service is destroyed
+        if (!isServiceActive) {
+            return;
+        }
+        
         try {
             Intent intent = new Intent("com.hollow.watch.BLE_EVENT");
             intent.putExtra("eventName", eventName);
@@ -626,9 +636,15 @@ public class BackgroundService extends Service {
                 // Use shared ApiClient if available (for connection reuse), otherwise create new one
                 ApiClient apiClient = sharedApiClient;
                 if (apiClient == null) {
-                    apiClient = new ApiClient(backendToken);
-                    // Cache it for future use
-                    sharedApiClient = apiClient;
+                    synchronized (BackgroundService.class) {
+                        if (sharedApiClient == null) {
+                            apiClient = new ApiClient(backendToken);
+                            // Cache it for future use (thread-safe)
+                            sharedApiClient = apiClient;
+                        } else {
+                            apiClient = sharedApiClient;
+                        }
+                    }
                 }
                 
                 // TODO: When backend supports separate transcription endpoint, uncomment this:
@@ -839,18 +855,22 @@ public class BackgroundService extends Service {
             return;
         }
         
-        // Initialize shared ApiClient if needed
+        // Initialize shared ApiClient if needed (thread-safe double-check locking)
         if (sharedApiClient == null) {
-            try {
-                SharedPreferences prefs = getSharedPreferences("_capacitor_preferences", MODE_PRIVATE);
-                String backendToken = prefs.getString("backend_token", "");
-                if (!backendToken.isEmpty()) {
-                    sharedApiClient = new ApiClient(backendToken);
-                    android.util.Log.d("BackgroundService", "Initialized shared ApiClient for connection pre-warming");
-                    logToFile("HTTP connection pre-warming started");
+            synchronized (BackgroundService.class) {
+                if (sharedApiClient == null) {
+                    try {
+                        SharedPreferences prefs = getSharedPreferences("_capacitor_preferences", MODE_PRIVATE);
+                        String backendToken = prefs.getString("backend_token", "");
+                        if (!backendToken.isEmpty()) {
+                            sharedApiClient = new ApiClient(backendToken);
+                            android.util.Log.d("BackgroundService", "Initialized shared ApiClient for connection pre-warming");
+                            logToFile("HTTP connection pre-warming started");
+                        }
+                    } catch (Exception e) {
+                        android.util.Log.w("BackgroundService", "Failed to initialize ApiClient for pre-warming: " + e.getMessage());
+                    }
                 }
-            } catch (Exception e) {
-                android.util.Log.w("BackgroundService", "Failed to initialize ApiClient for pre-warming: " + e.getMessage());
             }
         }
         
@@ -868,10 +888,16 @@ public class BackgroundService extends Service {
         prewarmRunnable = new Runnable() {
             @Override
             public void run() {
+                // Check if service is still active before accessing resources
+                if (!isServiceActive) {
+                    android.util.Log.d("BackgroundService", "Service destroyed, stopping pre-warming");
+                    return;
+                }
+                
                 if (sharedApiClient != null && bleManager != null && bleManager.isConnected()) {
                     sharedApiClient.prewarmConnection();
-                    // Schedule next pre-warming
-                    if (prewarmHandler != null) {
+                    // Schedule next pre-warming only if service is still active
+                    if (prewarmHandler != null && isServiceActive) {
                         prewarmHandler.postDelayed(this, PREWARM_INTERVAL_MS);
                     }
                 }
@@ -885,8 +911,12 @@ public class BackgroundService extends Service {
      * Stop HTTP connection pre-warming
      */
     private void stopConnectionPrewarming() {
-        if (prewarmHandler != null && prewarmRunnable != null) {
-            prewarmHandler.removeCallbacks(prewarmRunnable);
+        if (prewarmHandler != null) {
+            if (prewarmRunnable != null) {
+                prewarmHandler.removeCallbacks(prewarmRunnable);
+            }
+            // Clear handler messages queue to prevent any pending operations
+            prewarmHandler.removeCallbacksAndMessages(null);
             prewarmRunnable = null;
             prewarmHandler = null;
             android.util.Log.d("BackgroundService", "Stopped HTTP connection pre-warming");
@@ -1159,11 +1189,18 @@ public class BackgroundService extends Service {
             long apiStartTime = System.currentTimeMillis();
             
             // Use shared ApiClient if available (for connection reuse), otherwise create new one
+            // Thread-safe double-check locking pattern
             ApiClient apiClient = sharedApiClient;
             if (apiClient == null) {
-                apiClient = new ApiClient(backendToken);
-                // Cache it for future use
-                sharedApiClient = apiClient;
+                synchronized (BackgroundService.class) {
+                    if (sharedApiClient == null) {
+                        apiClient = new ApiClient(backendToken);
+                        // Cache it for future use (thread-safe)
+                        sharedApiClient = apiClient;
+                    } else {
+                        apiClient = sharedApiClient;
+                    }
+                }
             }
             ApiClient.ChatResponse response = apiClient.sendAudioRequest(
                 wavBase64,
