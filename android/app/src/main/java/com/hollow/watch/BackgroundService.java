@@ -49,6 +49,12 @@ public class BackgroundService extends Service {
     private java.util.List<byte[]> audioBuffer = new java.util.ArrayList<>();
     private boolean isVoiceMode = false;
     private String currentMode = "VOICE"; // "VOICE" or "SILENT"
+    
+    // HTTP connection pre-warming to reduce first request latency after inactivity
+    private ApiClient sharedApiClient;
+    private Handler prewarmHandler;
+    private Runnable prewarmRunnable;
+    private static final long PREWARM_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
     @Override
     public void onCreate() {
@@ -76,6 +82,13 @@ public class BackgroundService extends Service {
                         logToFile("BLE connection: " + (connected ? "CONNECTED" : "DISCONNECTED"));
                         updateNotification(connected);
                         notifyJavaScript("bleConnectionStateChanged", connected);
+                        
+                        // Start/stop HTTP connection pre-warming based on BLE connection
+                        if (connected) {
+                            startConnectionPrewarming();
+                        } else {
+                            stopConnectionPrewarming();
+                        }
                     }
                     
                     @Override
@@ -223,6 +236,10 @@ public class BackgroundService extends Service {
     @Override
     public void onDestroy() {
         android.util.Log.d("BackgroundService", "onDestroy() called");
+        logToFile("=== SERVICE DESTROYED ===");
+        
+        // Stop connection pre-warming
+        stopConnectionPrewarming();
         
         // Limpiar conexión BLE en el handler thread
         if (bleHandler != null && bleManager != null) {
@@ -606,7 +623,13 @@ public class BackgroundService extends Service {
                 long apiStartTime = System.currentTimeMillis();
                 long networkStartTime = apiStartTime;
                 
-                ApiClient apiClient = new ApiClient(backendToken);
+                // Use shared ApiClient if available (for connection reuse), otherwise create new one
+                ApiClient apiClient = sharedApiClient;
+                if (apiClient == null) {
+                    apiClient = new ApiClient(backendToken);
+                    // Cache it for future use
+                    sharedApiClient = apiClient;
+                }
                 
                 // TODO: When backend supports separate transcription endpoint, uncomment this:
                 // This separates audio upload from LLM processing for better performance
@@ -807,6 +830,70 @@ public class BackgroundService extends Service {
         }
     }
 
+    /**
+     * Start periodic HTTP connection pre-warming to reduce first request latency after inactivity
+     */
+    private void startConnectionPrewarming() {
+        if (prewarmHandler != null) {
+            // Already started
+            return;
+        }
+        
+        // Initialize shared ApiClient if needed
+        if (sharedApiClient == null) {
+            try {
+                SharedPreferences prefs = getSharedPreferences("_capacitor_preferences", MODE_PRIVATE);
+                String backendToken = prefs.getString("backend_token", "");
+                if (!backendToken.isEmpty()) {
+                    sharedApiClient = new ApiClient(backendToken);
+                    android.util.Log.d("BackgroundService", "Initialized shared ApiClient for connection pre-warming");
+                    logToFile("HTTP connection pre-warming started");
+                }
+            } catch (Exception e) {
+                android.util.Log.w("BackgroundService", "Failed to initialize ApiClient for pre-warming: " + e.getMessage());
+            }
+        }
+        
+        if (sharedApiClient == null) {
+            return;
+        }
+        
+        // Create handler on main thread for pre-warming
+        prewarmHandler = new Handler(getMainLooper());
+        
+        // Pre-warm immediately
+        sharedApiClient.prewarmConnection();
+        
+        // Schedule periodic pre-warming
+        prewarmRunnable = new Runnable() {
+            @Override
+            public void run() {
+                if (sharedApiClient != null && bleManager != null && bleManager.isConnected()) {
+                    sharedApiClient.prewarmConnection();
+                    // Schedule next pre-warming
+                    if (prewarmHandler != null) {
+                        prewarmHandler.postDelayed(this, PREWARM_INTERVAL_MS);
+                    }
+                }
+            }
+        };
+        
+        prewarmHandler.postDelayed(prewarmRunnable, PREWARM_INTERVAL_MS);
+    }
+    
+    /**
+     * Stop HTTP connection pre-warming
+     */
+    private void stopConnectionPrewarming() {
+        if (prewarmHandler != null && prewarmRunnable != null) {
+            prewarmHandler.removeCallbacks(prewarmRunnable);
+            prewarmRunnable = null;
+            prewarmHandler = null;
+            android.util.Log.d("BackgroundService", "Stopped HTTP connection pre-warming");
+            logToFile("HTTP connection pre-warming stopped");
+        }
+    }
+    
     private void acquireWakeLock() {
         PowerManager powerManager = (PowerManager) getSystemService(POWER_SERVICE);
         if (powerManager != null) {
@@ -1071,7 +1158,13 @@ public class BackgroundService extends Service {
             android.util.Log.d("BackgroundService", "Sending request to backend API...");
             long apiStartTime = System.currentTimeMillis();
             
-            ApiClient apiClient = new ApiClient(backendToken);
+            // Use shared ApiClient if available (for connection reuse), otherwise create new one
+            ApiClient apiClient = sharedApiClient;
+            if (apiClient == null) {
+                apiClient = new ApiClient(backendToken);
+                // Cache it for future use
+                sharedApiClient = apiClient;
+            }
             ApiClient.ChatResponse response = apiClient.sendAudioRequest(
                 wavBase64,
                 userId,

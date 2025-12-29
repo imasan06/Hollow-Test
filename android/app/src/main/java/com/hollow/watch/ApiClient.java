@@ -16,7 +16,21 @@ public class ApiClient {
     private static final String DEFAULT_API_ENDPOINT = "https://hollow-backend.fly.dev";
     private static final int CONNECT_TIMEOUT_SECONDS = 30;
     private static final int READ_TIMEOUT_SECONDS = 120;
-    // No retries - instant execution
+    
+    // Connection pool configuration for better connection reuse
+    // Keep connections alive for 10 minutes (default is 5 minutes)
+    private static final int CONNECTION_POOL_MAX_IDLE_CONNECTIONS = 5;
+    private static final long CONNECTION_POOL_KEEP_ALIVE_DURATION_MINUTES = 10;
+    
+    // Shared connection pool across all ApiClient instances for better reuse
+    private static final ConnectionPool connectionPool = new ConnectionPool(
+        CONNECTION_POOL_MAX_IDLE_CONNECTIONS,
+        CONNECTION_POOL_KEEP_ALIVE_DURATION_MINUTES,
+        TimeUnit.MINUTES
+    );
+    
+    // Shared OkHttpClient instance for connection reuse
+    private static OkHttpClient sharedHttpClient;
     
     private final OkHttpClient httpClient;
     private final String apiEndpoint;
@@ -30,13 +44,60 @@ public class ApiClient {
         this.backendToken = backendToken;
         this.apiEndpoint = apiEndpoint;
         
-        // Configure OkHttp with retry and better SSL handling
-        this.httpClient = new OkHttpClient.Builder()
-            .connectTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            .readTimeout(READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            .writeTimeout(READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            .retryOnConnectionFailure(true) // Enable automatic retry on connection failure
-            .build();
+        // Use shared client for better connection reuse
+        synchronized (ApiClient.class) {
+            if (sharedHttpClient == null) {
+                sharedHttpClient = new OkHttpClient.Builder()
+                    .connectTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                    .readTimeout(READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                    .writeTimeout(READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                    .retryOnConnectionFailure(true) // Enable automatic retry on connection failure
+                    .connectionPool(connectionPool) // Use shared connection pool
+                    .build();
+            }
+        }
+        
+        this.httpClient = sharedHttpClient;
+    }
+    
+    /**
+     * Pre-warm the HTTP connection by making a lightweight request
+     * This helps reduce latency for the first real request after inactivity
+     * Call this periodically (e.g., every 5 minutes) to keep connection alive
+     * 
+     * Note: This runs in a background thread and failures are non-critical.
+     * The connection will be established on the first real request if pre-warming fails.
+     */
+    public void prewarmConnection() {
+        new Thread(() -> {
+            try {
+                // Make a minimal chat request to establish and keep the connection alive
+                // This ensures TCP/TLS handshake is done before the first real request
+                JSONObject payload = new JSONObject();
+                payload.put("user_id", "prewarm");
+                payload.put("transcript", "ping");
+                
+                Request request = new Request.Builder()
+                    .url(apiEndpoint + "/v1/chat")
+                    .post(RequestBody.create(
+                        payload.toString(),
+                        MediaType.parse("application/json")
+                    ))
+                    .addHeader("Content-Type", "application/json")
+                    .addHeader("X-User-Token", backendToken)
+                    .build();
+                
+                try (Response response = httpClient.newCall(request).execute()) {
+                    // Connection is now warm - TCP/TLS handshake completed
+                    // We don't care about the response, just that the connection was established
+                    Log.d(TAG, "Connection pre-warmed successfully");
+                }
+            } catch (Exception e) {
+                // Pre-warming failed, but that's okay - connection will be established on first real request
+                // This is non-critical and shouldn't be logged as an error
+                Log.d(TAG, "Connection pre-warming skipped (non-critical): " + e.getClass().getSimpleName());
+            }
+        }).start();
     }
     
     public static class ChatResponse {
