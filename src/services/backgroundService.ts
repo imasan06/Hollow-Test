@@ -36,6 +36,8 @@ interface BackgroundServicePlugin {
     wavBase64: string;
     context?: string; // Optional conversation context
   }): Promise<{ success: boolean }>;
+  /** Share log file for debugging */
+  shareLogFile(): Promise<{ success: boolean; fileSize?: number }>;
 }
 
 const BackgroundServiceNative = registerPlugin<BackgroundServicePlugin>(
@@ -463,6 +465,33 @@ class BackgroundService {
         return { success: false };
       }
     }
+    return { success: false };
+  }
+
+  async shareLogFile(): Promise<{ success: boolean; fileSize?: number }> {
+    if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android") {
+      try {
+        if (
+          BackgroundServiceNative &&
+          typeof BackgroundServiceNative.shareLogFile === "function"
+        ) {
+          logger.info("Sharing log file...", "BackgroundService");
+          const result = await BackgroundServiceNative.shareLogFile();
+          return result;
+        } else {
+          logger.warn("shareLogFile not available", "BackgroundService");
+          return { success: false };
+        }
+      } catch (error) {
+        logger.error(
+          "Failed to share log file",
+          "BackgroundService",
+          error instanceof Error ? error : new Error(String(error))
+        );
+        return { success: false };
+      }
+    }
+    logger.warn("shareLogFile only available on Android", "BackgroundService");
     return { success: false };
   }
 }

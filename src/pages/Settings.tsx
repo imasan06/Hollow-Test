@@ -8,8 +8,10 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { ArrowLeft, Save, RotateCcw, Plus, Copy, Trash2, Edit2 } from 'lucide-react';
+import { ArrowLeft, Save, RotateCcw, Plus, Copy, Trash2, Edit2, FileText } from 'lucide-react';
 import { toast } from '@/hooks/use-toast';
+import { backgroundService } from '@/services/backgroundService';
+import { Capacitor } from '@capacitor/core';
 import { 
   getAllPresets, 
   getActivePreset, 
@@ -245,6 +247,41 @@ export function Settings() {
     }
   };
 
+  const handleShareLogs = async () => {
+    if (!Capacitor.isNativePlatform() || Capacitor.getPlatform() !== 'android') {
+      toast({
+        title: 'Not Available',
+        description: 'Log sharing is only available on Android',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    try {
+      const result = await backgroundService.shareLogFile();
+      if (result.success) {
+        const fileSizeKB = result.fileSize ? (result.fileSize / 1024).toFixed(2) : 'unknown';
+        toast({
+          title: 'Log File Ready',
+          description: `Log file (${fileSizeKB} KB) ready to share. Select an app to share it.`,
+        });
+      } else {
+        toast({
+          title: 'Error',
+          description: 'Failed to share log file. Make sure you have used the app to generate logs first.',
+          variant: 'destructive',
+        });
+      }
+    } catch (error) {
+      logger.error('Failed to share logs', 'Settings', error instanceof Error ? error : new Error(String(error)));
+      toast({
+        title: 'Error',
+        description: 'Failed to share log file',
+        variant: 'destructive',
+      });
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center">
@@ -431,6 +468,31 @@ export function Settings() {
               Reset
             </Button>
           </div>
+
+          {/* Debug Section */}
+          {Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android' && (
+            <Card className="border-border/60 shadow-sm">
+              <CardHeader className="pb-4">
+                <CardTitle className="text-lg">Debug Tools</CardTitle>
+                <CardDescription className="text-sm">
+                  Share log files for troubleshooting performance issues
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <Button
+                  variant="outline"
+                  onClick={handleShareLogs}
+                  className="w-full"
+                >
+                  <FileText className="h-4 w-4 mr-2" />
+                  Share Log File
+                </Button>
+                <p className="text-xs text-muted-foreground mt-2">
+                  This will open the Android share dialog. You can send the log file via email, WhatsApp, or save it to your device.
+                </p>
+              </CardContent>
+            </Card>
+          )}
 
           {/* Info */}
           <Card className="bg-muted/30 border-border/60 shadow-sm">

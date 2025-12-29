@@ -17,6 +17,12 @@ import android.os.Process;
 import androidx.core.app.NotificationCompat;
 import java.util.concurrent.atomic.AtomicBoolean;
 import android.content.SharedPreferences;
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
 
 public class BackgroundService extends Service {
     private static final String CHANNEL_ID = "HollowWatchBackgroundChannel";
@@ -67,6 +73,7 @@ public class BackgroundService extends Service {
                     @Override
                     public void onConnectionStateChanged(boolean connected) {
                         android.util.Log.d("BackgroundService", "BLE connection state changed: " + connected);
+                        logToFile("BLE connection: " + (connected ? "CONNECTED" : "DISCONNECTED"));
                         updateNotification(connected);
                         notifyJavaScript("bleConnectionStateChanged", connected);
                     }
@@ -74,12 +81,14 @@ public class BackgroundService extends Service {
                     @Override
                     public void onCharacteristicChanged(byte[] data) {
                         android.util.Log.d("BackgroundService", "BLE data received: " + data.length + " bytes");
+                        logToFile("BLE data received: " + data.length + " bytes");
                         processAudioData(data);
                     }
                     
                     @Override
                     public void onError(String error) {
                         android.util.Log.e("BackgroundService", "BLE error: " + error);
+                        logToFile("BLE ERROR: " + error);
                         notifyJavaScript("bleError", error);
                     }
                 });
@@ -90,14 +99,17 @@ public class BackgroundService extends Service {
             acquireWakeLock();
             
             android.util.Log.d("BackgroundService", "Service created successfully");
+            logToFile("=== SERVICE CREATED ===");
         } catch (Exception e) {
             android.util.Log.e("BackgroundService", "Error in onCreate: " + e.getMessage(), e);
+            logToFile("ERROR in onCreate: " + e.getMessage());
         }
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         android.util.Log.d("BackgroundService", "onStartCommand() called with startId: " + startId);
+        logToFile("=== SERVICE STARTED ===");
         
         try {
             if (intent != null) {
@@ -275,6 +287,7 @@ public class BackgroundService extends Service {
                     
                     if (message.equals(PROTOCOL_START_VOICE)) {
                         android.util.Log.d("BackgroundService", "START_V received - starting audio buffer");
+                        logToFile("START_VOICE received - starting audio buffer");
                         audioBuffer.clear();
                         isVoiceMode = true;
                         currentMode = "VOICE";
@@ -283,6 +296,7 @@ public class BackgroundService extends Service {
                     
                     if (message.equals(PROTOCOL_START_SILENT)) {
                         android.util.Log.d("BackgroundService", "START_S received - starting audio buffer (silent mode)");
+                        logToFile("START_SILENT received - starting audio buffer");
                         audioBuffer.clear();
                         isVoiceMode = true;
                         currentMode = "SILENT";
@@ -291,9 +305,11 @@ public class BackgroundService extends Service {
                     
                     if (message.equals(PROTOCOL_END)) {
                         android.util.Log.d("BackgroundService", "END received - processing buffered audio natively");
+                        logToFile("END received - processing " + audioBuffer.size() + " audio chunks");
                         
                         if (audioBuffer.isEmpty()) {
                             android.util.Log.w("BackgroundService", "END received but no audio buffered");
+                            logToFile("WARNING: END received but no audio buffered");
                             isVoiceMode = false;
                             return;
                         }
@@ -301,6 +317,7 @@ public class BackgroundService extends Service {
                         // Prevent concurrent processing
                         if (!isProcessingAudio.compareAndSet(false, true)) {
                             android.util.Log.w("BackgroundService", "Audio processing already in progress, skipping");
+                            logToFile("WARNING: Audio processing already in progress, skipping");
                             audioBuffer.clear();
                             isVoiceMode = false;
                             return;
@@ -390,10 +407,12 @@ public class BackgroundService extends Service {
         // Check if already connected to the same device
         if (bleManager != null && bleManager.isConnected() && deviceAddress.equals(connectedDeviceAddress)) {
             android.util.Log.d("BackgroundService", "Already connected to device: " + deviceAddress);
+            logToFile("Already connected to device: " + deviceAddress);
             return;
         }
         
         connectedDeviceAddress = deviceAddress;
+        logToFile("Connecting to BLE device: " + deviceAddress);
         if (bleHandler != null && bleManager != null) {
             // Ejecutar conexión en el handler thread de alta prioridad
             bleHandler.post(() -> {
@@ -401,10 +420,12 @@ public class BackgroundService extends Service {
                 boolean connected = bleManager.connectToDevice(deviceAddress);
                 if (!connected) {
                     android.util.Log.w("BackgroundService", "Failed to initiate BLE connection");
+                    logToFile("ERROR: Failed to initiate BLE connection to " + deviceAddress);
                 }
             });
         } else {
             android.util.Log.w("BackgroundService", "BLE manager or handler not initialized");
+            logToFile("WARNING: BLE manager or handler not initialized");
         }
     }
     
@@ -433,8 +454,20 @@ public class BackgroundService extends Service {
     private void processAudioNative(byte[] adpcmData) {
         // Run in background thread to avoid blocking BLE handler
         new Thread(() -> {
+            // Acquire wake lock for processing to prevent Doze mode from slowing down
+            PowerManager.WakeLock processingWakeLock = null;
             try {
+                PowerManager powerManager = (PowerManager) getSystemService(POWER_SERVICE);
+                if (powerManager != null) {
+                    processingWakeLock = powerManager.newWakeLock(
+                        PowerManager.PARTIAL_WAKE_LOCK, 
+                        "HollowWatch::AudioProcessing"
+                    );
+                    processingWakeLock.acquire(5 * 60 * 1000L); // 5 minutos máximo para procesamiento
+                }
+                
                 android.util.Log.d("BackgroundService", "Starting native audio processing pipeline");
+                logToFile("=== STARTING AUDIO PROCESSING ===");
                 long pipelineStartTime = System.currentTimeMillis();
                 
                 // Step 1: Decode ADPCM to PCM
@@ -476,6 +509,7 @@ public class BackgroundService extends Service {
                 int estimatedPayloadSizeKB = (wavBase64Size + 1000) / 1024; // Rough estimate including other fields
                 
                 android.util.Log.d("BackgroundService", "  Encoded: " + wavBase64Size + " chars base64 (" + wavBase64SizeKB + " KB, took " + encodeTime + "ms)");
+                logToFile("Encode: " + encodeTime + "ms, " + wavBase64SizeKB + " KB");
                 
                 // Check size limit
                 if (wavBase64SizeKB > MAX_AUDIO_BASE64_SIZE_KB) {
@@ -618,6 +652,7 @@ public class BackgroundService extends Service {
                 long apiTime = System.currentTimeMillis() - apiStartTime;
                 android.util.Log.d("BackgroundService", "  API request completed in " + apiTime + "ms");
                 android.util.Log.d("BackgroundService", "  Response received: " + (response.text != null ? response.text.length() : 0) + " chars");
+                logToFile("API: " + apiTime + "ms, response: " + (response.text != null ? response.text.length() : 0) + " chars");
                 
                 // Step 5: Send response to watch via BLE
                 if (response.error != null && !response.error.isEmpty()) {
@@ -662,6 +697,10 @@ public class BackgroundService extends Service {
                 android.util.Log.d("BackgroundService", "  Payload size: ~" + estimatedPayloadSizeKB + " KB");
                 android.util.Log.d("BackgroundService", "═══════════════════════════════════════════════════");
                 
+                // Log timing breakdown to file for offline debugging
+                logToFile(String.format("TIMING: decode=%dms, encode=%dms, config=%dms, context=%dms, api=%dms, TOTAL=%dms",
+                    decodeTime, encodeTime, configTime, contextTime, apiTime, totalTime));
+                
                 // Step 6: Save messages directly to SharedPreferences (works even when JavaScript is paused)
                 if (response.transcription != null && !response.transcription.isEmpty() && 
                     response.text != null && !response.text.isEmpty()) {
@@ -676,7 +715,12 @@ public class BackgroundService extends Service {
                 
             } catch (Exception e) {
                 android.util.Log.e("BackgroundService", "Error in native audio processing: " + e.getMessage(), e);
+                logToFile("ERROR: " + e.getMessage());
             } finally {
+                // Release processing wake lock
+                if (processingWakeLock != null && processingWakeLock.isHeld()) {
+                    processingWakeLock.release();
+                }
                 isProcessingAudio.set(false);
             }
         }).start();
@@ -776,6 +820,33 @@ public class BackgroundService extends Service {
         if (wakeLock != null && wakeLock.isHeld()) {
             wakeLock.release();
             wakeLock = null;
+        }
+    }
+    
+    /**
+     * Log to file for debugging when USB is not connected
+     * Logs are saved to: /data/data/com.hollow.watch/files/hollow_logs.txt
+     */
+    private void logToFile(String message) {
+        try {
+            File logFile = new File(getFilesDir(), "hollow_logs.txt");
+            FileWriter writer = new FileWriter(logFile, true); // Append mode
+            
+            SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US);
+            String timestamp = sdf.format(new Date());
+            String logLine = timestamp + " [BackgroundService] " + message + "\n";
+            
+            writer.append(logLine);
+            writer.flush();
+            writer.close();
+            
+            // Keep log file under 1MB (delete and recreate if too large)
+            if (logFile.length() > 1024 * 1024) {
+                logFile.delete();
+            }
+        } catch (IOException e) {
+            // Silently fail - don't break processing if logging fails
+            android.util.Log.w("BackgroundService", "Failed to write to log file: " + e.getMessage());
         }
     }
 

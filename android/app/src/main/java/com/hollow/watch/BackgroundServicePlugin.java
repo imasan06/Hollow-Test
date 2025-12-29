@@ -346,6 +346,52 @@ public class BackgroundServicePlugin extends Plugin {
     }
     
     @PluginMethod
+    public void shareLogFile(PluginCall call) {
+        Log.d(TAG, "shareLogFile() called");
+        try {
+            android.content.Context context = getContext();
+            if (context == null) {
+                call.reject("Context is null");
+                return;
+            }
+            
+            java.io.File logFile = new java.io.File(context.getFilesDir(), "hollow_logs.txt");
+            
+            if (!logFile.exists()) {
+                call.reject("Log file does not exist yet. Use the app first to generate logs.");
+                return;
+            }
+            
+            // Use FileProvider to share the file
+            android.net.Uri fileUri = androidx.core.content.FileProvider.getUriForFile(
+                context,
+                context.getPackageName() + ".fileprovider",
+                logFile
+            );
+            
+            android.content.Intent shareIntent = new android.content.Intent(android.content.Intent.ACTION_SEND);
+            shareIntent.setType("text/plain");
+            shareIntent.putExtra(android.content.Intent.EXTRA_STREAM, fileUri);
+            shareIntent.putExtra(android.content.Intent.EXTRA_SUBJECT, "Hollow Watch Logs");
+            shareIntent.putExtra(android.content.Intent.EXTRA_TEXT, "Logs from Hollow Watch app");
+            shareIntent.addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            
+            android.content.Intent chooser = android.content.Intent.createChooser(shareIntent, "Share Log File");
+            chooser.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+            
+            context.startActivity(chooser);
+            
+            JSObject result = new JSObject();
+            result.put("success", true);
+            result.put("fileSize", logFile.length());
+            call.resolve(result);
+        } catch (Exception e) {
+            Log.e(TAG, "Exception in shareLogFile: " + e.getMessage(), e);
+            call.reject("Failed to share log file: " + e.getMessage(), e);
+        }
+    }
+    
+    @PluginMethod
     public void processAudioNative(PluginCall call) {
         Log.d(TAG, "processAudioNative() called");
         try {

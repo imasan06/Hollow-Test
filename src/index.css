@@ -6,76 +6,88 @@
 
 @layer base {
   :root {
-    --background: 220 20% 6%;
-    --foreground: 210 20% 95%;
+    --background: 0 0% 100%;
+    --foreground: 240 10% 3.9%;
 
-    --card: 220 18% 10%;
-    --card-foreground: 210 20% 95%;
+    --card: 0 0% 100%;
+    --card-foreground: 240 10% 3.9%;
 
-    --popover: 220 18% 10%;
-    --popover-foreground: 210 20% 95%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 10% 3.9%;
 
-    --primary: 175 65% 45%;
-    --primary-foreground: 220 20% 6%;
+    --primary: 240 5.9% 10%;
+    --primary-foreground: 0 0% 98%;
 
-    --secondary: 220 12% 16%;
-    --secondary-foreground: 210 20% 85%;
+    --secondary: 240 4.8% 95.9%;
+    --secondary-foreground: 240 5.9% 10%;
 
-    --muted: 220 12% 12%;
-    --muted-foreground: 215 12% 50%;
+    --muted: 240 4.8% 95.9%;
+    --muted-foreground: 240 3.8% 46.1%;
 
-    --accent: 175 55% 35%;
-    --accent-foreground: 220 20% 6%;
+    --accent: 240 4.8% 95.9%;
+    --accent-foreground: 240 5.9% 10%;
 
-    --destructive: 0 60% 48%;
-    --destructive-foreground: 210 40% 98%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
 
-    --success: 145 55% 38%;
-    --success-foreground: 220 20% 6%;
+    --success: 145 0% 38%; /* Desaturated success */
+    --success-foreground: 0 0% 98%;
 
-    --warning: 35 70% 48%;
-    --warning-foreground: 220 20% 6%;
+    --warning: 35 0% 48%; /* Desaturated warning */
+    --warning-foreground: 0 0% 98%;
 
-    --border: 220 12% 18%;
-    --input: 220 12% 16%;
-    --ring: 175 65% 45%;
+    --border: 240 5.9% 90%;
+    --input: 240 5.9% 90%;
+    --ring: 240 10% 3.9%;
 
     --radius: 0.75rem;
 
-    --glow-primary: 0 0 30px hsl(175 65% 45% / 0.25);
-    --glow-success: 0 0 30px hsl(145 55% 38% / 0.25);
-    --glow-destructive: 0 0 30px hsl(0 60% 48% / 0.25);
+    --glow-primary: 0 0 30px hsl(0 0% 0% / 0.15);
+    --glow-success: 0 0 30px hsl(0 0% 40% / 0.15);
+    --glow-destructive: 0 0 30px hsl(0 0% 40% / 0.15);
 
-    --sidebar-background: 220 18% 8%;
-    --sidebar-foreground: 240 4.8% 95.9%;
-    --sidebar-primary: 175 65% 45%;
-    --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 220 15% 15%;
-    --sidebar-accent-foreground: 240 4.8% 95.9%;
-    --sidebar-border: 220 15% 20%;
-    --sidebar-ring: 175 65% 45%;
+    --sidebar-background: 0 0% 98%;
+    --sidebar-foreground: 240 5.3% 26.1%;
+    --sidebar-primary: 240 5.9% 10%;
+    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-accent: 240 4.8% 95.9%;
+    --sidebar-accent-foreground: 240 5.9% 10%;
+    --sidebar-border: 220 13% 91%;
+    --sidebar-ring: 217 91% 60%;
   }
 
   .dark {
-    --background: 220 20% 6%;
-    --foreground: 210 20% 95%;
-    --card: 220 18% 10%;
-    --card-foreground: 210 20% 95%;
-    --popover: 220 18% 10%;
-    --popover-foreground: 210 20% 95%;
-    --primary: 175 85% 50%;
-    --primary-foreground: 220 20% 6%;
-    --secondary: 220 15% 18%;
-    --secondary-foreground: 210 20% 85%;
-    --muted: 220 15% 15%;
-    --muted-foreground: 215 15% 55%;
-    --accent: 175 70% 40%;
-    --accent-foreground: 220 20% 6%;
-    --destructive: 0 72% 55%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 220 15% 20%;
-    --input: 220 15% 18%;
-    --ring: 175 85% 50%;
+    --background: 0 0% 0%; /* Pure Black */
+    --foreground: 0 0% 98%;
+
+    --card: 0 0% 4%; /* Slightly lighter than black */
+    --card-foreground: 0 0% 98%;
+
+    --popover: 0 0% 4%;
+    --popover-foreground: 0 0% 98%;
+
+    --primary: 0 0% 98%; /* White primary */
+    --primary-foreground: 0 0% 0%;
+
+    --secondary: 0 0% 12%; /* Dark gray */
+    --secondary-foreground: 0 0% 98%;
+
+    --muted: 0 0% 12%;
+    --muted-foreground: 0 0% 64%;
+
+    --accent: 0 0% 12%;
+    --accent-foreground: 0 0% 98%;
+
+    --destructive: 0 0% 30%; /* Dark gray strictness */
+    --destructive-foreground: 0 0% 98%;
+
+    --border: 0 0% 15%;
+    --input: 0 0% 15%;
+    --ring: 0 0% 83%;
+
+    --glow-primary: 0 0 40px hsl(0 0% 100% / 0.2);
+    --glow-success: 0 0 30px hsl(0 0% 100% / 0.1);
+    --glow-destructive: 0 0 30px hsl(0 0% 100% / 0.1);
   }
 }
 

@@ -132,7 +132,7 @@ export function useBle(): UseBleReturn {
       // Check if already processing with better timeout handling
       if (isProcessingRequest.current) {
         const timeSinceStart = now - lastAudioProcessedTime.current;
-        
+
         // More aggressive timeout - 30s instead of 180s
         if (timeSinceStart > MAX_PROCESSING_TIME_MS) {
           logger.error(
@@ -399,7 +399,7 @@ export function useBle(): UseBleReturn {
       // Only save if we have both transcription and response, or if forced
       if (pending.transcription && pending.response) {
         const baseTimestamp = Date.now();
-        
+
         try {
           // Save user message first (transcription)
           await appendMessage({
@@ -407,19 +407,19 @@ export function useBle(): UseBleReturn {
             text: pending.transcription,
             timestamp: baseTimestamp,
           });
-          
+
           // Then save assistant message (response)
           await appendMessage({
             role: "assistant",
             text: pending.response,
             timestamp: baseTimestamp + 1, // Ensure order
           });
-          
+
           logger.debug(
             `✅ Saved native messages in correct order: user "${pending.transcription.substring(0, 30)}..." then assistant "${pending.response.substring(0, 30)}..."`,
             "Hook"
           );
-          
+
           // Clear pending messages
           pendingNativeMessages.current = null;
         } catch (err) {
@@ -554,7 +554,7 @@ export function useBle(): UseBleReturn {
             if (response) {
               setLastResponse(response);
               logger.debug("Native processing response received", "Hook");
-              
+
               // Initialize or update pending messages
               const sessionId = activeSessionId.current || `native_${Date.now()}`;
               if (!pendingNativeMessages.current) {
@@ -565,9 +565,9 @@ export function useBle(): UseBleReturn {
                   timestamp: Date.now(),
                 };
               }
-              
+
               pendingNativeMessages.current.response = response;
-              
+
               // Try to save if transcription is already available
               savePendingMessages().catch((err) => {
                 logger.error("Error saving pending messages", "Hook", err);
@@ -589,7 +589,7 @@ export function useBle(): UseBleReturn {
             if (transcription) {
               setLastTranscription(transcription);
               logger.debug("Native processing transcription received", "Hook");
-              
+
               // Initialize or update pending messages
               const sessionId = activeSessionId.current || `native_${Date.now()}`;
               if (!pendingNativeMessages.current) {
@@ -600,9 +600,9 @@ export function useBle(): UseBleReturn {
                   timestamp: Date.now(),
                 };
               }
-              
+
               pendingNativeMessages.current.transcription = transcription;
-              
+
               // Try to save if response is already available
               savePendingMessages().catch((err) => {
                 logger.error("Error saving pending messages", "Hook", err);
@@ -666,20 +666,20 @@ export function useBle(): UseBleReturn {
     return () => {
       isCleanedUp = true;
       logger.debug("Cleaning up native listeners", "Hook");
-      
+
       // Cleanup timeout
       if (pendingMessagesTimeoutRef.current) {
         clearTimeout(pendingMessagesTimeoutRef.current);
         pendingMessagesTimeoutRef.current = null;
       }
-      
+
       // Save any pending messages before cleanup
       if (pendingNativeMessages.current) {
         savePendingMessages(true).catch(() => {
           // Ignore errors during cleanup
         });
       }
-      
+
       Promise.all(listenerRemovers.map(l => l.remove())).catch(() => {
         logger.debug("Error removing some listeners (may already be removed)", "Hook");
       });
@@ -755,9 +755,8 @@ export function useBle(): UseBleReturn {
 
             toast({
               title: "Connected",
-              description: `Connected to ${
-                bleManager.getDeviceName() || "watch"
-              }`,
+              description: `Connected to ${bleManager.getDeviceName() || "watch"
+                }`,
             });
           } else if (state === "disconnected") {
             timeSyncService.stop();
@@ -807,6 +806,18 @@ export function useBle(): UseBleReturn {
 
         onAudioComplete: (adpcmData, mode) => {
           logger.debug(`onAudioComplete called. Mode: ${mode}`, "Hook");
+
+          // CRITICAL: Skip JavaScript audio processing when native BackgroundService is handling BLE
+          // The native service already processes audio and sends responses to the watch
+          // Processing here too would cause duplicate API calls and merged responses
+          if (Capacitor.isNativePlatform() && backgroundService.getIsEnabled()) {
+            logger.debug(
+              "Skipping JS audio processing - native BackgroundService handles it",
+              "Hook"
+            );
+            return;
+          }
+
           processAudio(adpcmData, mode);
         },
         onTimeRequest: () => {
@@ -930,7 +941,7 @@ export function useBle(): UseBleReturn {
 
         // Agregar contexto aquí también
         const conversationContext = await formatConversationContext(false);
-        
+
         const apiResponse = await sendTranscription({
           text: text.trim(),
           context: conversationContext || "",
@@ -974,8 +985,8 @@ export function useBle(): UseBleReturn {
 
       // Agregar contexto al enviar con audio TTS
       const conversationContext = await formatConversationContext(false);
-      
-      const apiResponse = await sendTranscription({ 
+
+      const apiResponse = await sendTranscription({
         audio: wavBase64,
         context: conversationContext || "",
       });
@@ -1061,8 +1072,8 @@ export function useBle(): UseBleReturn {
 
       // Agregar contexto aquí
       const conversationContext = await formatConversationContext(false);
-      
-      const apiResponse = await sendTranscription({ 
+
+      const apiResponse = await sendTranscription({
         text: text.trim(),
         context: conversationContext || "",
       });
@@ -1127,7 +1138,7 @@ export function useBle(): UseBleReturn {
       bleManager.disconnect();
       activeSessionId.current = null;
       isProcessingRequest.current = false;
-      
+
       if (processingTimeoutRef.current) {
         clearTimeout(processingTimeoutRef.current);
         processingTimeoutRef.current = null;
