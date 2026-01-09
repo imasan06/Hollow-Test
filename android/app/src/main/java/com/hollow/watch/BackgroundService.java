@@ -571,8 +571,19 @@ public class BackgroundService extends Service {
                 long contextStartTime = System.currentTimeMillis();
                 long contextTime = 0;
                 try {
+                    // Force fresh read by getting a new instance and using getAll() to force disk sync
                     SharedPreferences prefs = getSharedPreferences("_capacitor_preferences", MODE_PRIVATE);
+                    java.util.Map<String, ?> allPrefs = prefs.getAll(); // Force disk read
                     String conversationHistoryJson = prefs.getString("conversation_history", null);
+                    
+                    // Also try reading from getAll() if direct read returned null/empty
+                    if ((conversationHistoryJson == null || conversationHistoryJson.isEmpty()) && allPrefs.containsKey("conversation_history")) {
+                        Object historyValue = allPrefs.get("conversation_history");
+                        if (historyValue != null) {
+                            conversationHistoryJson = historyValue.toString();
+                            android.util.Log.d("BackgroundService", "Found conversation_history via getAll() fallback");
+                        }
+                    }
                     
                     if (conversationHistoryJson != null && !conversationHistoryJson.isEmpty()) {
                         android.util.Log.d("BackgroundService", "Found conversation_history: " + conversationHistoryJson.length() + " chars");
@@ -1357,17 +1368,23 @@ public class BackgroundService extends Service {
             long saveTime = System.currentTimeMillis() - saveStartTime;
             
             if (success) {
+                // Verify the save by reading back immediately
+                String verifyJson = prefs.getString("conversation_history", "[]");
+                org.json.JSONArray verifyArray = new org.json.JSONArray(verifyJson);
                 android.util.Log.d("BackgroundService", 
                     "✅ Saved conversation messages natively: user \"" + 
                     transcription.substring(0, Math.min(30, transcription.length())) + 
                     "...\" and assistant \"" + 
                     response.substring(0, Math.min(30, response.length())) + 
-                    "...\" (total: " + historyArray.length() + " messages, save took " + saveTime + "ms)");
+                    "...\" (total: " + historyArray.length() + " messages, verified: " + verifyArray.length() + " messages, save took " + saveTime + "ms)");
+                logToFile(String.format("Saved conversation: %d messages (verified: %d)", historyArray.length(), verifyArray.length()));
             } else {
                 android.util.Log.e("BackgroundService", "Failed to save conversation messages (commit returned false)");
+                logToFile("ERROR: Failed to save conversation messages (commit returned false)");
             }
         } catch (Exception e) {
             android.util.Log.e("BackgroundService", "Error saving conversation messages natively: " + e.getMessage(), e);
+            logToFile("ERROR saving conversation: " + e.getMessage());
         }
     }
     
@@ -1426,12 +1443,15 @@ public class BackgroundService extends Service {
             long saveTime = System.currentTimeMillis() - saveStartTime;
             
             if (success) {
+                // Verify the save by reading back immediately
+                String verifyJson = prefs.getString("conversation_history", "[]");
+                org.json.JSONArray verifyArray = new org.json.JSONArray(verifyJson);
                 android.util.Log.d("BackgroundService", 
-                    "✅ Saved conversation messages natively: user \"" + 
+                    "✅ Saved conversation messages natively (static): user \"" + 
                     transcription.substring(0, Math.min(30, transcription.length())) + 
                     "...\" and assistant \"" + 
                     response.substring(0, Math.min(30, response.length())) + 
-                    "...\" (total: " + historyArray.length() + " messages, save took " + saveTime + "ms)");
+                    "...\" (total: " + historyArray.length() + " messages, verified: " + verifyArray.length() + " messages, save took " + saveTime + "ms)");
             } else {
                 android.util.Log.e("BackgroundService", "Failed to save conversation messages (commit returned false)");
             }
